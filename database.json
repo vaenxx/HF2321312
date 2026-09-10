@@ -11,21 +11,21 @@
       "is_approved": 1,
       "is_banned": 0,
       "created_at": "2026-01-01 00:00:00",
-      "key_code": "SOVESZ-POIWOQPMNDSKLAJFOIYOI23HSK",
+      "key_code": "HF-246B09FF2BAAB6AA921F394A227A63893EC4",
       "days": 30,
       "client_last_seen": "2026-09-10T14:41:49.030977+00:00"
     }
   },
   "keys": {
-    "SOVESZ-ADMIN-2026": {
-      "key": "SOVESZ-POIWOQPMNDSKLAJFOIYOI23HSK",
+    "HF-246B09FF2BAAB6AA921F394A227A63893EC4": {
+      "key": "HF-246B09FF2BAAB6AA921F394A227A63893EC4",
       "target_nickname": "sovesz",
       "role": "Спектатор",
       "mode": "HolyWorld",
       "is_used": 1,
       "created_by": 7918461586,
       "created_at": "2026-01-01 00:00:00",
-      "key_code": "SOVESZ-ADMIN-2026",
+      "key_code": "HF-246B09FF2BAAB6AA921F394A227A63893EC4",
       "days": 30,
       "used_by": 7918461586
     },
@@ -70,7 +70,7 @@
     "fedb501e842343c0a51275ae138d01c8": {
       "id": "fedb501e842343c0a51275ae138d01c8",
       "owner_id": 7918461586,
-      "key_code": "SOVESZ-ADMIN-2026",
+      "key_code": "HF-246B09FF2BAAB6AA921F394A227A63893EC4",
       "ip": "127.0.0.1",
       "location": "🏠 локальная сеть",
       "status": "rejected",
@@ -80,7 +80,7 @@
     "f30dcd5e37e4491a934dc14cb9f219be": {
       "id": "f30dcd5e37e4491a934dc14cb9f219be",
       "owner_id": 7918461586,
-      "key_code": "SOVESZ-ADMIN-2026",
+      "key_code": "HF-246B09FF2BAAB6AA921F394A227A63893EC4",
       "ip": "127.0.0.1",
       "location": "🏠 локальная сеть",
       "status": "approved",
