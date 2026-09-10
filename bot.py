@@ -42,6 +42,9 @@ async def activate_api(request: web.Request) -> web.Response:
         if not user or not user.get("is_approved") or user.get("is_banned"):
             logging.warning("[AUDIT] minecraft_auth rejected owner_id=%s reason=profile_denied", owner_id)
             return web.json_response({"ok": False, "error": "Профиль ключа не одобрен или заблокирован."}, status=403)
+        expected_name = (user.get("nickname") or key.get("target_nickname", "")).strip().casefold()
+        if minecraft_username and expected_name and minecraft_username.casefold() != expected_name:
+            return web.json_response({"ok": False, "error": f"Используйте Minecraft-ник {user.get('nickname', '')}."}, status=403)
         ip = request.headers.get("X-Forwarded-For", request.remote or "unknown").split(",")[0].strip()
         now = datetime.now(timezone.utc).timestamp()
         if now - _ACTIVATE_ATTEMPTS.get(ip, 0.0) < 3:
@@ -90,6 +93,7 @@ async def heartbeat_api(request: web.Request) -> web.Response:
     try:
         payload = await request.json()
         code = db.sanitize_input(payload.get("code"), 128)
+        minecraft_username = db.sanitize_input(payload.get("minecraft_username"), 64)
         data = await db.load_db()
         key = data.get("keys", {}).get(code)
         if key is None:
@@ -98,6 +102,8 @@ async def heartbeat_api(request: web.Request) -> web.Response:
         owner_id = key.get("used_by") if key else None
         user = data.get("users", {}).get(str(owner_id)) if owner_id is not None else None
         if not key or not key.get("is_used") or not user or not user.get("is_approved") or user.get("is_banned") or user.get("client_kicked"):
+            return web.json_response({"ok": False}, status=403)
+        if minecraft_username and user.get("nickname", "").casefold() != minecraft_username.casefold():
             return web.json_response({"ok": False}, status=403)
         user["client_last_seen"] = datetime.now(timezone.utc).isoformat()
         await db.save_db(data)
@@ -116,11 +122,45 @@ async def login_status_api(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "telegram_id": item.get("owner_id"), "nickname": user.get("nickname", key.get("target_nickname", "")),
                               "role": user.get("role", key.get("role", "Стажер")), "mode": user.get("mode", key.get("mode", "")), "expires_at": user.get("expires_at", "")})
 
+async def moderation_event_api(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json(); code = db.sanitize_input(payload.get("code"), 128)
+        data = await db.load_db(); key = data.get("keys", {}).get(code) or next((v for v in data.get("keys", {}).values() if v.get("key") == code or v.get("key_code") == code), None)
+        owner_id = key.get("used_by") if key else None; user = data.get("users", {}).get(str(owner_id)) if owner_id else None
+        if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
+        await db.record_moderation_event(owner_id, payload.get("type", "punishment"), db.sanitize_input(payload.get("target"), 64), db.sanitize_input(payload.get("action"), 64), db.sanitize_input(payload.get("duration"), 32), db.sanitize_input(payload.get("reason"), 300))
+        return web.json_response({"ok": True})
+    except Exception:
+        return web.json_response({"ok": False}, status=400)
+
+async def _irc_user(data: dict, code: str):
+    key = data.get("keys", {}).get(code) or next((v for v in data.get("keys", {}).values() if v.get("key") == code or v.get("key_code") == code), None)
+    owner_id = key.get("used_by") if key else None; user = data.get("users", {}).get(str(owner_id)) if owner_id else None
+    return key, owner_id, user
+
+async def irc_send_api(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json(); data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
+        if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
+        message_id = await db.add_irc_message(owner_id, user.get("nickname", ""), user.get("role", ""), payload.get("text", ""))
+        return web.json_response({"ok": True, "id": message_id})
+    except Exception: return web.json_response({"ok": False}, status=400)
+
+async def irc_poll_api(request: web.Request) -> web.Response:
+    try:
+        data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(request.query.get("code"), 128))
+        if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
+        return web.json_response({"ok": True, "messages": await db.get_irc_messages(int(request.query.get("after", "0")))})
+    except Exception: return web.json_response({"ok": False}, status=400)
+
 async def start_api() -> web.AppRunner:
     app = web.Application()
     app.router.add_post("/api/v1/activate", activate_api)
     app.router.add_post("/api/v1/heartbeat", heartbeat_api)
     app.router.add_get("/api/v1/login-status/{request_id}", login_status_api)
+    app.router.add_post("/api/v1/event", moderation_event_api)
+    app.router.add_post("/api/v1/irc/send", irc_send_api)
+    app.router.add_get("/api/v1/irc/poll", irc_poll_api)
     runner = web.AppRunner(app)
     await runner.setup()
     try:
