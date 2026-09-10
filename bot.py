@@ -142,8 +142,17 @@ async def irc_send_api(request: web.Request) -> web.Response:
     try:
         payload = await request.json(); data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
         if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
+        if await db.is_irc_muted(user.get("nickname", "")): return web.json_response({"ok": False, "error": "IRC-мут активен."}, status=403)
         message_id = await db.add_irc_message(owner_id, user.get("nickname", ""), user.get("role", ""), payload.get("text", ""))
         return web.json_response({"ok": True, "id": message_id})
+    except Exception: return web.json_response({"ok": False}, status=400)
+
+async def irc_mute_api(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json(); data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
+        if not key or not user or not user.get("is_approved"): return web.json_response({"ok": False}, status=403)
+        await db.set_irc_mute(owner_id, db.sanitize_input(payload.get("target"), 64), db.sanitize_input(payload.get("duration"), 16), db.sanitize_input(payload.get("reason"), 300))
+        return web.json_response({"ok": True})
     except Exception: return web.json_response({"ok": False}, status=400)
 
 async def irc_poll_api(request: web.Request) -> web.Response:
@@ -160,6 +169,7 @@ async def start_api() -> web.AppRunner:
     app.router.add_get("/api/v1/login-status/{request_id}", login_status_api)
     app.router.add_post("/api/v1/event", moderation_event_api)
     app.router.add_post("/api/v1/irc/send", irc_send_api)
+    app.router.add_post("/api/v1/irc/mute", irc_mute_api)
     app.router.add_get("/api/v1/irc/poll", irc_poll_api)
     runner = web.AppRunner(app)
     await runner.setup()
