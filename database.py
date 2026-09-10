@@ -1,4 +1,4 @@
-import asyncio, json, os, tempfile, uuid
+import asyncio, json, os, tempfile, uuid, logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -70,11 +70,22 @@ async def get_key(code: str) -> dict | None:
 async def redeem_key(code: str, telegram_id: int) -> dict | None:
     async with _LOCK:
         db = await load_db(); stored_code, key = _find_key(db, code)
+        logging.info("[AUDIT] redeem_key found=%s stored_id=%s is_used=%s used_by=%s requester=%s",
+                     bool(key), stored_code or "-", key.get("is_used") if key else "-",
+                     key.get("used_by") if key else "-", telegram_id)
         if not key: return None
         if key.get("is_used"):
             # Повторный вход разрешен только тому Telegram-пользователю,
             # который уже активировал этот ключ ранее.
-            return dict(key) if key.get("used_by") == telegram_id else None
+            owner_match = key.get("used_by") == telegram_id
+            if not owner_match:
+                profile = db.get("users", {}).get(str(telegram_id), {})
+                entered = sanitize_input(code, 128)
+                owner_match = profile.get("key_code") in {entered, stored_code, key.get("key"), key.get("key_code")}
+                if owner_match:
+                    key["used_by"] = telegram_id
+                    await _write(db)
+            return dict(key) if owner_match else None
         key["is_used"], key["used_by"] = 1, telegram_id; key["used_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S"); await _write(db); return dict(key)
 async def mark_key_used(code: str) -> None:
     db = await load_db();
