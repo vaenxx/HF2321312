@@ -1,0 +1,160 @@
+import asyncio
+import logging
+import os
+from datetime import datetime, timezone
+from dotenv import load_dotenv
+import aiohttp
+from aiohttp import web
+
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
+
+import database as db
+from middlewares.antispam import AntiSpamMiddleware
+from handlers import auth, profile, mod, admin
+
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_HOST = os.getenv("HF_API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("HF_API_PORT", "8080"))
+_ACTIVATE_ATTEMPTS: dict[str, float] = {}
+
+logging.basicConfig(level=logging.INFO)
+
+async def activate_api(request: web.Request) -> web.Response:
+    """Validates only keys already activated in Telegram and returns the bound profile."""
+    try:
+        payload = await request.json()
+        code = db.sanitize_input(payload.get("code"), 128)
+        minecraft_username = db.sanitize_input(payload.get("minecraft_username"), 64)
+        data = await db.load_db()
+        key = data.get("keys", {}).get(code)
+        if not key or not key.get("is_used"):
+            return web.json_response({"ok": False, "error": "Ключ ещё не активирован в Telegram или не существует."}, status=403)
+        owner_id = key.get("used_by")
+        user = data.get("users", {}).get(str(owner_id)) if owner_id is not None else None
+        if not user or not user.get("is_approved") or user.get("is_banned"):
+            return web.json_response({"ok": False, "error": "Профиль ключа не одобрен или заблокирован."}, status=403)
+        ip = request.headers.get("X-Forwarded-For", request.remote or "unknown").split(",")[0].strip()
+        now = datetime.now(timezone.utc).timestamp()
+        if now - _ACTIVATE_ATTEMPTS.get(ip, 0.0) < 3:
+            return web.json_response({"ok": False, "error": "Слишком частые попытки. Подождите несколько секунд."}, status=429)
+        _ACTIVATE_ATTEMPTS[ip] = now
+        location = await resolve_location(ip)
+        request_id = await db.create_login_request(owner_id, code, ip, location)
+        try:
+            await bot_instance.send_message(owner_id,
+                "🔐 <b>Попытка входа в HF-Moderation</b>\n\n"
+                f"🌐 IP: <code>{ip}</code>\n📍 Место: <b>{location}</b>\n"
+                f"🎮 Minecraft: <code>{minecraft_username or 'не указан'}</code>\n\n"
+                "Разрешить вход?",
+                parse_mode="HTML", reply_markup=login_request_kb(request_id))
+        except Exception:
+            return web.json_response({"ok": False, "error": "Не удалось доставить запрос в Telegram."}, status=503)
+        return web.json_response({"ok": False, "pending": True, "request_id": request_id,
+                                  "error": "Ожидается подтверждение входа в Telegram."}, status=202)
+    except (ValueError, TypeError, KeyError):
+        return web.json_response({"ok": False, "error": "Некорректный запрос."}, status=400)
+
+def login_request_kb(request_id: str):
+    return {"inline_keyboard": [[{"text": "✅ Принять", "callback_data": f"login_approve_{request_id}"},
+                                  {"text": "❌ Отклонить", "callback_data": f"login_reject_{request_id}"}]]}
+
+bot_instance = None
+
+async def resolve_location(ip: str) -> str:
+    if ip in {"127.0.0.1", "::1", "unknown"} or ip.startswith(("10.", "192.168.", "172.16.")):
+        return "🏠 локальная сеть"
+    try:
+        timeout = aiohttp.ClientTimeout(total=2)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(f"https://ipapi.co/{ip}/json/") as response:
+                data = await response.json()
+        country = data.get("country_name") or "страна не определена"
+        code = (data.get("country_code") or "").upper()
+        emoji = "".join(chr(127397 + ord(char)) for char in code) if len(code) == 2 else "🌐"
+        city = data.get("city") or "город не определён"
+        return f"{emoji} {country}, {city}"
+    except Exception:
+        return "🌐 страна не определена"
+
+async def heartbeat_api(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json()
+        code = db.sanitize_input(payload.get("code"), 128)
+        data = await db.load_db()
+        key = data.get("keys", {}).get(code)
+        owner_id = key.get("used_by") if key else None
+        user = data.get("users", {}).get(str(owner_id)) if owner_id is not None else None
+        if not key or not key.get("is_used") or not user or not user.get("is_approved") or user.get("is_banned") or user.get("client_kicked"):
+            return web.json_response({"ok": False}, status=403)
+        user["client_last_seen"] = datetime.now(timezone.utc).isoformat()
+        await db.save_db(data)
+        return web.json_response({"ok": True})
+    except (ValueError, TypeError, KeyError):
+        return web.json_response({"ok": False}, status=400)
+
+async def login_status_api(request: web.Request) -> web.Response:
+    item = await db.get_login_request(db.sanitize_input(request.match_info.get("request_id"), 64))
+    if not item:
+        return web.json_response({"ok": False, "error": "Запрос не найден."}, status=404)
+    if item.get("status") != "approved":
+        return web.json_response({"ok": False, "pending": item.get("status") == "pending", "error": "Вход отклонён." if item.get("status") == "rejected" else "Ожидается подтверждение."}, status=403)
+    data = await db.load_db(); user = data.get("users", {}).get(str(item.get("owner_id")), {})
+    key = data.get("keys", {}).get(item.get("key_code"), {})
+    return web.json_response({"ok": True, "telegram_id": item.get("owner_id"), "nickname": user.get("nickname", key.get("target_nickname", "")),
+                              "role": user.get("role", key.get("role", "Стажер")), "mode": user.get("mode", key.get("mode", "")), "expires_at": user.get("expires_at", "")})
+
+async def start_api() -> web.AppRunner:
+    app = web.Application()
+    app.router.add_post("/api/v1/activate", activate_api)
+    app.router.add_post("/api/v1/heartbeat", heartbeat_api)
+    app.router.add_get("/api/v1/login-status/{request_id}", login_status_api)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    try:
+        await web.TCPSite(runner, API_HOST, API_PORT).start()
+    except OSError as exc:
+        await runner.cleanup()
+        logging.error("Не удалось открыть API-порт %s: %s", API_PORT, exc)
+        return None
+    logging.info("HF API listening on %s:%s", API_HOST, API_PORT)
+    return runner
+
+async def main():
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN не установлен в .env файле!")
+
+    # Инициализация JSON БД
+    await db.init_db()
+
+    # Фоновая автопроверка БД раз в 10 секунд
+    asyncio.create_task(db.auto_reload_db_task(interval=10))
+
+    bot = Bot(token=BOT_TOKEN)
+    global bot_instance
+    bot_instance = bot
+    api_runner = await start_api()
+    dp = Dispatcher(storage=MemoryStorage())
+
+    # 🛡️ ПОДКЛЮЧЕНИЕ АНТИСПАМ ЗАЩИТЫ (0.7 сек задержка)
+    dp.message.outer_middleware(AntiSpamMiddleware(limit=0.7))
+    dp.callback_query.outer_middleware(AntiSpamMiddleware(limit=0.7))
+
+    # Подключение роутеров
+    dp.include_router(auth.router)
+    dp.include_router(profile.router)
+    dp.include_router(mod.router)
+    dp.include_router(admin.router)
+
+    logging.info("🚀 Бот запущен со встроенной системой защиты от спама!")
+    try:
+        await dp.start_polling(bot)
+    finally:
+        if api_runner is not None:
+            await api_runner.cleanup()
+        await bot.session.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())

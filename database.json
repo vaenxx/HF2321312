@@ -1,0 +1,91 @@
+{
+  "users": {
+    "7918461586": {
+      "telegram_id": 7918461586,
+      "username": "sovesz",
+      "nickname": "sovesz",
+      "role": "Спектатор",
+      "mode": "HolyWorld",
+      "discord_id": "",
+      "discord_tag": "",
+      "is_approved": 1,
+      "is_banned": 0,
+      "created_at": "2026-01-01 00:00:00",
+      "key_code": "SOVESZ-ADMIN-2026",
+      "days": 30,
+      "client_last_seen": "2026-09-10T14:41:49.030977+00:00"
+    }
+  },
+  "keys": {
+    "SOVESZ-ADMIN-2026": {
+      "key": "SOVESZ-ADMIN-2026",
+      "target_nickname": "sovesz",
+      "role": "Спектатор",
+      "mode": "HolyWorld",
+      "is_used": 1,
+      "created_by": 7918461586,
+      "created_at": "2026-01-01 00:00:00",
+      "key_code": "SOVESZ-ADMIN-2026",
+      "days": 30,
+      "used_by": 7918461586
+    },
+    "HF-BDAA0EF4076E": {
+      "key": "HF-BDAA0EF4076E",
+      "key_code": "HF-BDAA0EF4076E",
+      "target_nickname": "okakami2",
+      "role": "Стажер",
+      "mode": "HolyWorld",
+      "days": 2,
+      "is_used": 1,
+      "created_at": "2026-09-10 17:03:09",
+      "used_by": 5729802563,
+      "used_at": "2026-09-10 17:03:17"
+    }
+  },
+  "applications": [
+    {
+      "id": 1,
+      "user_id": 5729802563,
+      "type": "entry_request",
+      "comment": "",
+      "status": "approved"
+    }
+  ],
+  "mod_versions": [],
+  "stats": {
+    "7918461586": {
+      "user_id": 7918461586,
+      "bans": 0,
+      "mutes": 0,
+      "checks": 0
+    },
+    "5729802563": {
+      "user_id": 5729802563,
+      "bans": 0,
+      "mutes": 0,
+      "checks": 0
+    }
+  },
+  "login_requests": {
+    "fedb501e842343c0a51275ae138d01c8": {
+      "id": "fedb501e842343c0a51275ae138d01c8",
+      "owner_id": 7918461586,
+      "key_code": "SOVESZ-ADMIN-2026",
+      "ip": "127.0.0.1",
+      "location": "🏠 локальная сеть",
+      "status": "rejected",
+      "created_at": "2026-09-10 17:33:00",
+      "updated_at": "2026-09-10 17:33:07"
+    },
+    "f30dcd5e37e4491a934dc14cb9f219be": {
+      "id": "f30dcd5e37e4491a934dc14cb9f219be",
+      "owner_id": 7918461586,
+      "key_code": "SOVESZ-ADMIN-2026",
+      "ip": "127.0.0.1",
+      "location": "🏠 локальная сеть",
+      "status": "approved",
+      "created_at": "2026-09-10 17:35:02",
+      "updated_at": "2026-09-10 17:35:06"
+    }
+  }
+}
