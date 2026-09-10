@@ -28,16 +28,19 @@ async def activate_api(request: web.Request) -> web.Response:
         payload = await request.json()
         code = db.sanitize_input(payload.get("code"), 128)
         minecraft_username = db.sanitize_input(payload.get("minecraft_username"), 64)
+        logging.info("[AUDIT] minecraft_auth username=%s code=%s", minecraft_username or "-", "<hidden>")
         data = await db.load_db()
         key = data.get("keys", {}).get(code)
         if key is None:
             key = next((item for item in data.get("keys", {}).values()
                         if item.get("key") == code or item.get("key_code") == code), None)
         if not key or not key.get("is_used"):
+            logging.warning("[AUDIT] minecraft_auth rejected reason=invalid_or_unused")
             return web.json_response({"ok": False, "error": "Ключ ещё не активирован в Telegram или не существует."}, status=403)
         owner_id = key.get("used_by")
         user = data.get("users", {}).get(str(owner_id)) if owner_id is not None else None
         if not user or not user.get("is_approved") or user.get("is_banned"):
+            logging.warning("[AUDIT] minecraft_auth rejected owner_id=%s reason=profile_denied", owner_id)
             return web.json_response({"ok": False, "error": "Профиль ключа не одобрен или заблокирован."}, status=403)
         ip = request.headers.get("X-Forwarded-For", request.remote or "unknown").split(",")[0].strip()
         now = datetime.now(timezone.utc).timestamp()
@@ -46,6 +49,7 @@ async def activate_api(request: web.Request) -> web.Response:
         _ACTIVATE_ATTEMPTS[ip] = now
         location = await resolve_location(ip)
         request_id = await db.create_login_request(owner_id, code, ip, location)
+        logging.info("[AUDIT] login_request created request_id=%s owner_id=%s ip=%s location=%s", request_id, owner_id, ip, location)
         try:
             await bot_instance.send_message(owner_id,
                 "🔐 <b>Попытка входа в HF-Moderation</b>\n\n"
@@ -134,6 +138,7 @@ async def main():
 
     # Инициализация JSON БД
     await db.init_db()
+    logging.info("[AUDIT] database path=%s", db.DB_PATH)
 
     # Фоновая автопроверка БД раз в 10 секунд
     asyncio.create_task(db.auto_reload_db_task(interval=10))
