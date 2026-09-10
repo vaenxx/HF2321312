@@ -31,10 +31,12 @@ class ModUploadStates(StatesGroup):
 
 class BroadcastStates(StatesGroup):
     waiting_for_message = State()
+    waiting_for_confirmation = State()
 
 def get_admin_main_reply_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="👥 Список модераторов"), KeyboardButton(text="🔑 База ключей")],
+        [KeyboardButton(text="🖥 Активные сессии")],
         [KeyboardButton(text="📥 Заявки на ключи"), KeyboardButton(text="➕ Создать новый ключ")],
         [KeyboardButton(text="📦 Управление модом"), KeyboardButton(text="📚 Версии мода")],
         [KeyboardButton(text="📄 Выгрузить базы в TXT")],
@@ -92,6 +94,23 @@ async def admin_panel_main(message: Message):
         parse_mode="HTML",
         reply_markup=get_admin_main_reply_kb()
     )
+
+@router.message(F.text == "🖥 Активные сессии")
+async def active_sessions(message: Message):
+    if not await check_admin_access(message): return
+    users = await db.get_all_users(limit=100000, offset=0); rows = []; text = "🖥 <b>Активные Minecraft-сессии</b>\n\n"
+    for user in users:
+        if not user.get("client_last_seen"): continue
+        text += f"🟢 <b>{user.get('nickname','')}</b> | {user.get('role','')} | <code>{user.get('telegram_id')}</code>\n"
+        rows.append([InlineKeyboardButton(text=f"⛔ Отключить {user.get('nickname','')}", callback_data=f"session_kick_{user.get('telegram_id')}")])
+    if not rows: text += "Активных сессий нет."
+    await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
+
+@router.callback_query(F.data.startswith("session_kick_"))
+async def session_kick(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    await db.set_client_kicked(int(callback.data.removeprefix("session_kick_")), True)
+    await callback.answer("Сессия отключена.", show_alert=True)
 
 # --- 1. ТАБЛИЦА БАЗЫ МОДЕРАТОРОВ ---
 @router.message(F.text == "👥 Список модераторов")
@@ -579,13 +598,35 @@ async def broadcast_start(message: Message, state: FSMContext):
 @router.message(BroadcastStates.waiting_for_message)
 async def broadcast_send(message: Message, state: FSMContext, bot):
     if not await check_admin_access(message): return
-    users = await db.get_all_users(limit=100000, offset=0); sent = 0
+    await state.update_data(source_chat=message.chat.id, source_message=message.message_id)
+    await message.answer("⚠️ <b>Проверьте глобальное сообщение</b>\nОно будет отправлено всем одобренным модераторам.", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Изменить", callback_data="broadcast_edit"), InlineKeyboardButton(text="✅ Сохранить", callback_data="broadcast_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel")]
+    ]))
+    await bot.copy_message(chat_id=message.chat.id, from_chat_id=message.chat.id, message_id=message.message_id)
+    await state.set_state(BroadcastStates.waiting_for_confirmation)
+
+async def _send_broadcast(state: FSMContext, bot) -> int:
+    data = await state.get_data(); users = await db.get_all_users(limit=100000, offset=0); sent = 0
     for user in users:
         if not user.get("is_approved") or user.get("is_banned"): continue
         try:
-            await bot.copy_message(chat_id=user["telegram_id"], from_chat_id=message.chat.id, message_id=message.message_id)
+            await bot.copy_message(chat_id=user["telegram_id"], from_chat_id=data["source_chat"], message_id=data["source_message"])
             sent += 1
         except Exception:
             continue
-    await state.clear()
-    await message.answer(f"✅ <b>Глобальное сообщение отправлено.</b> Получателей: {sent}", parse_mode="HTML", reply_markup=get_admin_main_reply_kb())
+    return sent
+
+@router.callback_query(F.data == "broadcast_confirm", BroadcastStates.waiting_for_confirmation)
+async def broadcast_confirm(callback: CallbackQuery, state: FSMContext, bot):
+    sent = await _send_broadcast(state, bot); await state.clear(); await callback.answer("Рассылка отправлена", show_alert=True)
+    await callback.message.edit_text(f"✅ <b>Глобальное сообщение отправлено.</b> Получателей: {sent}", parse_mode="HTML")
+
+@router.callback_query(F.data == "broadcast_edit", BroadcastStates.waiting_for_confirmation)
+async def broadcast_edit(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(BroadcastStates.waiting_for_message); await callback.answer("Отправьте исправленный текст или файл")
+    await callback.message.edit_text("✏️ Отправьте новое сообщение для предпросмотра.", parse_mode="HTML")
+
+@router.callback_query(F.data == "broadcast_cancel", BroadcastStates.waiting_for_confirmation)
+async def broadcast_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear(); await callback.answer("Рассылка отменена", show_alert=True); await callback.message.edit_text("❌ Рассылка отменена.", parse_mode="HTML")
