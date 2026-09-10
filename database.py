@@ -1,4 +1,4 @@
-import asyncio, json, os, tempfile, uuid, logging
+import asyncio, json, os, tempfile, uuid, logging, shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -45,6 +45,10 @@ async def load_db() -> dict:
     except (OSError, json.JSONDecodeError): return _default()
 
 async def _write(data: dict) -> None:
+    if DB_PATH.exists():
+        backup = DB_PATH.with_suffix(".json.bak")
+        try: shutil.copy2(DB_PATH, backup)
+        except OSError: pass
     fd, name = tempfile.mkstemp(prefix="database.", suffix=".tmp", dir=DB_PATH.parent); os.close(fd)
     try:
         async with aiofiles.open(name, "w", encoding="utf-8") as f: await f.write(json.dumps(_normalize(data), ensure_ascii=False, indent=2))
@@ -231,14 +235,14 @@ async def record_moderation_event(owner_id: int, event_type: str, target: str, a
     else: stats["checks"] = stats.get("checks", 0) + 1
     await save_db(db)
 
-async def add_irc_message(owner_id: int, nickname: str, role: str, text: str, is_admin: bool = False) -> int:
+async def add_irc_message(owner_id: int, nickname: str, role: str, text: str, is_admin: bool = False, recipient_id: int | None = None) -> int:
     db = await load_db(); messages = db.setdefault("irc_messages", [])
     message_id = max([int(item.get("id", 0)) for item in messages], default=0) + 1
-    messages.append({"id": message_id, "owner_id": owner_id, "nickname": nickname, "role": role, "is_admin": is_admin, "text": sanitize_input(text, 500), "created_at": datetime.now().strftime("%H:%M:%S")})
+    messages.append({"id": message_id, "owner_id": owner_id, "recipient_id": recipient_id, "nickname": nickname, "role": role, "is_admin": is_admin, "text": sanitize_input(text, 500), "created_at": datetime.now().strftime("%H:%M:%S")})
     db["irc_messages"] = messages[-500:]; await save_db(db); return message_id
 
-async def get_irc_messages(after_id: int = 0) -> list[dict]:
-    return [item for item in (await load_db()).get("irc_messages", []) if int(item.get("id", 0)) > after_id]
+async def get_irc_messages(after_id: int = 0, recipient_id: int | None = None) -> list[dict]:
+    return [item for item in (await load_db()).get("irc_messages", []) if int(item.get("id", 0)) > after_id and (item.get("recipient_id") is None or item.get("recipient_id") == recipient_id or item.get("owner_id") == recipient_id)]
 
 async def set_irc_mute(owner_id: int, target: str, duration: str, reason: str) -> None:
     db = await load_db(); db.setdefault("irc_mutes", {})[target.casefold()] = {"target": target, "duration": duration, "reason": reason, "owner_id": owner_id, "created_at": datetime.now().timestamp()}; await save_db(db)
