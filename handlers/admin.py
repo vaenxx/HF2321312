@@ -36,7 +36,8 @@ def get_admin_main_reply_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="👥 Список модераторов"), KeyboardButton(text="🔑 База ключей")],
         [KeyboardButton(text="📥 Заявки на ключи"), KeyboardButton(text="➕ Создать новый ключ")],
-        [KeyboardButton(text="📦 Управление модом"), KeyboardButton(text="📄 Выгрузить базы в TXT")],
+        [KeyboardButton(text="📦 Управление модом"), KeyboardButton(text="📚 Версии мода")],
+        [KeyboardButton(text="📄 Выгрузить базы в TXT")],
         [KeyboardButton(text="📢 Глобальное сообщение")],
         [KeyboardButton(text="◀️ Главное меню")]
     ], resize_keyboard=True)
@@ -537,9 +538,34 @@ async def publish_mod(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
     data = await state.get_data(); roles = data.get("selected_roles", [])
     if not roles: return await callback.answer("Выберите хотя бы одну роль.", show_alert=True)
-    await db.save_mod_version(data["version"], data["changelog"], data["file_id"], roles)
+    if not await db.save_mod_version(data["version"], data["changelog"], data["file_id"], roles):
+        await callback.answer("Такая версия уже существует.", show_alert=True); return
     await state.clear(); await callback.answer("Мод опубликован", show_alert=True)
     await callback.message.edit_text("🎉 <b>Версия мода опубликована.</b>", parse_mode="HTML")
+
+@router.message(F.text == "📚 Версии мода")
+async def list_mod_versions(message: Message):
+    if not await check_admin_access(message): return
+    versions = await db.get_all_mod_versions()
+    if not versions:
+        await message.answer("📚 <b>Версий мода пока нет.</b>", parse_mode="HTML"); return
+    rows = []
+    text = "📚 <b>Версии HF-Moderation</b>\n\n"
+    for version in versions:
+        text += f"• <b>{version.get('version_name','')}</b> | {version.get('created_at','')}\n"
+        rows.append([InlineKeyboardButton(text=f"📄 {version.get('version_name','')}", callback_data=f"mod_view_{version.get('id')}")])
+    await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+@router.callback_query(F.data.startswith("mod_view_"))
+async def view_mod_version(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    try: version_id = int(callback.data.removeprefix("mod_view_"))
+    except ValueError: return await callback.answer("Некорректная версия.", show_alert=True)
+    versions = await db.get_all_mod_versions(); version = next((item for item in versions if item.get("id") == version_id), None)
+    if not version: return await callback.answer("Версия не найдена.", show_alert=True)
+    roles = ", ".join(version.get("allowed_roles", version.get("roles", [])))
+    await callback.answer()
+    await callback.message.edit_text(f"📦 <b>HF-Moderation {version.get('version_name','')}</b>\n\n📅 Создана: {version.get('created_at','')}\n🔐 Роли: {roles}\n\n📝 <b>Чейнджлог:</b>\n{version.get('changelog','—')}", parse_mode="HTML")
 
 @router.message(F.text == "📢 Глобальное сообщение")
 async def broadcast_start(message: Message, state: FSMContext):
