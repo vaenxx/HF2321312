@@ -17,7 +17,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_HOST = os.getenv("HF_API_HOST", "0.0.0.0")
-API_PORT = int(os.getenv("HF_API_PORT", "8080"))
+API_PORT = int(os.getenv("PORT", os.getenv("HF_API_PORT", "3000")))
 _ACTIVATE_ATTEMPTS: dict[str, float] = {}
 
 logging.basicConfig(level=logging.INFO)
