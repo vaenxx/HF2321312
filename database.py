@@ -134,6 +134,36 @@ async def set_user_role(tg: int, role: str) -> bool:
     await save_db(db)
     return True
 
+async def extend_user_key(tg: int, days: int) -> bool:
+    db = await load_db(); user = db["users"].get(str(tg))
+    if not user or not user.get("key_code"): return False
+    code, key = _find_key(db, user["key_code"])
+    if not key: return False
+    key["days"] = int(days); key["is_used"] = 1; key["is_active"] = 1; user["days"] = int(days)
+    await save_db(db); return True
+
+async def deactivate_user_key(tg: int) -> bool:
+    db = await load_db(); user = db["users"].get(str(tg));
+    if not user: return False
+    code, key = _find_key(db, user.get("key_code", ""))
+    if key: key["is_active"] = 0
+    user["is_approved"] = 0
+    await save_db(db); return True
+
+async def delete_user_account(tg: int, delete_key: bool) -> bool:
+    db = await load_db(); user = db["users"].pop(str(tg), None)
+    if not user: return False
+    if delete_key:
+        code, key = _find_key(db, user.get("key_code", ""))
+        if code: db["keys"].pop(code, None)
+    await save_db(db); return True
+
+async def get_moderation_logs(tg: int, kind: str = "all") -> list[dict]:
+    db = await load_db(); result = []
+    if kind in ("all", "punishments"): result.extend(db.get("punishment_logs", {}).get(str(tg), []))
+    if kind in ("all", "checks"): result.extend(db.get("check_logs", {}).get(str(tg), []))
+    return list(reversed(result))
+
 async def toggle_user_mode(tg: int, mode: str) -> tuple[bool, list[str]]:
     db = await load_db(); user = db["users"].get(str(tg))
     if not user or mode not in ALL_MODES: return False, []
