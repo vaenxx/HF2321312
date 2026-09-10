@@ -34,7 +34,7 @@ async def activate_api(request: web.Request) -> web.Response:
         if key is None:
             key = next((item for item in data.get("keys", {}).values()
                         if item.get("key") == code or item.get("key_code") == code), None)
-        if not key or not key.get("is_used"):
+        if not key or not key.get("is_used") or key.get("is_active", 1) == 0:
             logging.warning("[AUDIT] minecraft_auth rejected reason=invalid_or_unused")
             return web.json_response({"ok": False, "error": "Ключ ещё не активирован в Telegram или не существует."}, status=403)
         owner_id = key.get("used_by")
@@ -101,7 +101,7 @@ async def heartbeat_api(request: web.Request) -> web.Response:
                         if item.get("key") == code or item.get("key_code") == code), None)
         owner_id = key.get("used_by") if key else None
         user = data.get("users", {}).get(str(owner_id)) if owner_id is not None else None
-        if not key or not key.get("is_used") or not user or not user.get("is_approved") or user.get("is_banned") or user.get("client_kicked"):
+        if not key or not key.get("is_used") or key.get("is_active", 1) == 0 or not user or not user.get("is_approved") or user.get("is_banned") or user.get("client_kicked"):
             return web.json_response({"ok": False}, status=403)
         if minecraft_username and user.get("nickname", "").casefold() != minecraft_username.casefold():
             return web.json_response({"ok": False}, status=403)
