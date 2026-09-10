@@ -148,7 +148,10 @@ async def toggle_user_mode(tg: int, mode: str) -> tuple[bool, list[str]]:
     return True, modes
 async def update_discord(tg, tag): db=await load_db(); db["users"].get(str(tg), {}).update(discord_tag=sanitize_input(tag,50)); await save_db(db)
 async def get_user_stats(tg): return (await load_db())["stats"].get(str(tg),{"bans":0,"mutes":0,"checks":0})
-async def ban_user(tg): db=await load_db(); db["users"].get(str(tg), {}).update(is_banned=1); await save_db(db)
+async def ban_user(tg):
+    admin_ids = {int(item.strip()) for item in os.getenv("ADMIN_IDS", "").split(",") if item.strip().isdigit()}
+    if int(tg) in admin_ids: return False
+    db=await load_db(); db["users"].get(str(tg), {}).update(is_banned=1); await save_db(db); return True
 async def kick_user(tg): db=await load_db(); db["users"].pop(str(tg),None); await save_db(db)
 
 async def create_application(user_id, app_type, comment=""):
