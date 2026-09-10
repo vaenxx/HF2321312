@@ -1,4 +1,5 @@
 import os
+import logging
 from dotenv import load_dotenv
 from aiogram import Router, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
@@ -101,6 +102,7 @@ async def process_key(message: Message, state: FSMContext, bot):
     key_data = await db.redeem_key(key_code, message.from_user.id)
 
     if not key_data:
+        logging.warning("[AUDIT] key_rejected user_id=%s username=%s", message.from_user.id, message.from_user.username or "-")
         await message.answer("❌ <b>Ошибка!</b> Недействительный или уже использованный ключ.", parse_mode="HTML")
         return
 
@@ -116,6 +118,7 @@ async def process_key(message: Message, state: FSMContext, bot):
         key_code=key_code,
     )
     if returning_owner:
+        logging.info("[AUDIT] key_login_success user_id=%s nickname=%s role=%s", message.from_user.id, key_data.get("target_nickname", "-"), key_data.get("role", "-"))
         await state.clear()
         await message.answer(
             f"👋 <b>С возвращением, {key_data['target_nickname']}!</b>\n\n"
@@ -158,6 +161,7 @@ async def approve_login(callback):
     if not item or item.get("owner_id") != callback.from_user.id:
         await callback.answer("Нет доступа к этому запросу.", show_alert=True); return
     await db.update_login_request(request_id, "approved")
+    logging.info("[AUDIT] login_approved request_id=%s owner_id=%s by=%s", request_id, item["owner_id"], callback.from_user.id)
     await db.set_client_kicked(item["owner_id"], False)
     await callback.answer("Вход разрешён.", show_alert=True)
     await callback.message.edit_text("✅ <b>Вход в Minecraft разрешён.</b>", parse_mode="HTML")
@@ -169,5 +173,6 @@ async def reject_login(callback):
     if not item or item.get("owner_id") != callback.from_user.id:
         await callback.answer("Нет доступа к этому запросу.", show_alert=True); return
     await db.update_login_request(request_id, "rejected")
+    logging.info("[AUDIT] login_rejected request_id=%s owner_id=%s by=%s", request_id, item["owner_id"], callback.from_user.id)
     await callback.answer("Вход отклонён.", show_alert=True)
     await callback.message.edit_text("❌ <b>Вход в Minecraft отклонён.</b>", parse_mode="HTML")
