@@ -27,12 +27,17 @@ class ModUploadStates(StatesGroup):
     waiting_for_file = State()
     waiting_for_version = State()
     waiting_for_changelog = State()
+    waiting_for_roles = State()
+
+class BroadcastStates(StatesGroup):
+    waiting_for_message = State()
 
 def get_admin_main_reply_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="👥 Список модераторов"), KeyboardButton(text="🔑 База ключей")],
         [KeyboardButton(text="📥 Заявки на ключи"), KeyboardButton(text="➕ Создать новый ключ")],
         [KeyboardButton(text="📦 Управление модом"), KeyboardButton(text="📄 Выгрузить базы в TXT")],
+        [KeyboardButton(text="📢 Глобальное сообщение")],
         [KeyboardButton(text="◀️ Главное меню")]
     ], resize_keyboard=True)
 
@@ -507,6 +512,51 @@ async def upload_mod_changelog(message: Message, state: FSMContext):
     changelog = db.sanitize_input(message.text, max_length=1000)
     data = await state.get_data()
     
-    await db.save_mod_version(data["version"], changelog, data["file_id"], db.ALL_ROLES)
+    await state.update_data(changelog=changelog, selected_roles=[])
+    rows = [[InlineKeyboardButton(text=f"⬜ {role}", callback_data=f"mod_role_{index}")] for index, role in enumerate(db.ALL_ROLES)]
+    rows.append([InlineKeyboardButton(text="✅ Опубликовать для выбранных", callback_data="mod_publish")])
+    await message.answer("🔐 <b>Выберите, кому доступна загрузка этой версии:</b>\nМожно выбрать несколько ролей.", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await state.set_state(ModUploadStates.waiting_for_roles)
+
+@router.callback_query(F.data.startswith("mod_role_"), ModUploadStates.waiting_for_roles)
+async def toggle_mod_role(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    try: index = int(callback.data.removeprefix("mod_role_")); role = db.ALL_ROLES[index]
+    except (ValueError, IndexError): return await callback.answer("Некорректная роль.", show_alert=True)
+    data = await state.get_data(); roles = list(data.get("selected_roles", []))
+    if role in roles: roles.remove(role)
+    else: roles.append(role)
+    await state.update_data(selected_roles=roles)
+    rows = [[InlineKeyboardButton(text=("✅ " if item in roles else "⬜ ") + item, callback_data=f"mod_role_{i}")] for i, item in enumerate(db.ALL_ROLES)]
+    rows.append([InlineKeyboardButton(text="✅ Опубликовать для выбранных", callback_data="mod_publish")])
+    await callback.answer("Обновлено")
+    await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+@router.callback_query(F.data == "mod_publish", ModUploadStates.waiting_for_roles)
+async def publish_mod(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    data = await state.get_data(); roles = data.get("selected_roles", [])
+    if not roles: return await callback.answer("Выберите хотя бы одну роль.", show_alert=True)
+    await db.save_mod_version(data["version"], data["changelog"], data["file_id"], roles)
+    await state.clear(); await callback.answer("Мод опубликован", show_alert=True)
+    await callback.message.edit_text("🎉 <b>Версия мода опубликована.</b>", parse_mode="HTML")
+
+@router.message(F.text == "📢 Глобальное сообщение")
+async def broadcast_start(message: Message, state: FSMContext):
+    if not await check_admin_access(message): return
+    await message.answer("📢 <b>Глобальное сообщение</b>\nОтправьте текст, фото или файл с подписью. Сообщение получат все одобренные пользователи.", parse_mode="HTML", reply_markup=get_cancel_reply_kb())
+    await state.set_state(BroadcastStates.waiting_for_message)
+
+@router.message(BroadcastStates.waiting_for_message)
+async def broadcast_send(message: Message, state: FSMContext, bot):
+    if not await check_admin_access(message): return
+    users = await db.get_all_users(limit=100000, offset=0); sent = 0
+    for user in users:
+        if not user.get("is_approved") or user.get("is_banned"): continue
+        try:
+            await bot.copy_message(chat_id=user["telegram_id"], from_chat_id=message.chat.id, message_id=message.message_id)
+            sent += 1
+        except Exception:
+            continue
     await state.clear()
-    await message.answer("🎉 <b>Мод успешно загружен и выпущен!</b>", parse_mode="HTML", reply_markup=get_admin_main_reply_kb())
+    await message.answer(f"✅ <b>Глобальное сообщение отправлено.</b> Получателей: {sent}", parse_mode="HTML", reply_markup=get_admin_main_reply_kb())
