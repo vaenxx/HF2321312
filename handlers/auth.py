@@ -99,8 +99,8 @@ async def process_key(message: Message, state: FSMContext, bot):
         await message.answer("ℹ️ Ваш доступ уже активирован.", parse_mode="HTML", reply_markup=get_main_reply_kb(message.from_user.id))
         return
     key_data = await db.redeem_key(key_code, message.from_user.id)
-    
-    if not key_data or key_data.get("is_used"):
+
+    if not key_data:
         await message.answer("❌ <b>Ошибка!</b> Недействительный или уже использованный ключ.", parse_mode="HTML")
         return
 
