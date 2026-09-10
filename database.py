@@ -197,6 +197,30 @@ async def record_moderation_event(owner_id: int, event_type: str, target: str, a
     if event_type == "punishment": stats["mutes" if action == "Мут" else "bans"] = stats.get("mutes" if action == "Мут" else "bans", 0) + 1
     else: stats["checks"] = stats.get("checks", 0) + 1
     await save_db(db)
+
+async def add_irc_message(owner_id: int, nickname: str, role: str, text: str) -> int:
+    db = await load_db(); messages = db.setdefault("irc_messages", [])
+    message_id = max([int(item.get("id", 0)) for item in messages], default=0) + 1
+    messages.append({"id": message_id, "owner_id": owner_id, "nickname": nickname, "role": role, "text": sanitize_input(text, 500), "created_at": datetime.now().strftime("%H:%M:%S")})
+    db["irc_messages"] = messages[-500:]; await save_db(db); return message_id
+
+async def get_irc_messages(after_id: int = 0) -> list[dict]:
+    return [item for item in (await load_db()).get("irc_messages", []) if int(item.get("id", 0)) > after_id]
+
+async def set_irc_mute(owner_id: int, target: str, duration: str, reason: str) -> None:
+    db = await load_db(); db.setdefault("irc_mutes", {})[target.casefold()] = {"target": target, "duration": duration, "reason": reason, "owner_id": owner_id, "created_at": datetime.now().timestamp()}; await save_db(db)
+
+async def is_irc_muted(target: str) -> bool:
+    item = (await load_db()).get("irc_mutes", {}).get(target.casefold())
+    if not item: return False
+    raw = item.get("duration", "0")
+    try:
+        value, unit = int(raw[:-1]), raw[-1].lower(); seconds = value * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
+        if datetime.now().timestamp() - float(item.get("created_at", 0)) >= seconds:
+            return False
+    except (ValueError, KeyError):
+        return True
+    return True
 async def get_latest_mod():
     mods=(await load_db())["mod_versions"]; return mods[-1] if mods else None
 async def get_all_mod_versions(): return list(reversed((await load_db())["mod_versions"]))
