@@ -55,10 +55,21 @@ async def auto_reload_db_task(interval: int = 10) -> None:
     while True:
         await asyncio.sleep(interval)
 
-async def get_key(code: str) -> dict | None: return (await load_db())["keys"].get(sanitize_input(code, 128))
+def _find_key(db: dict, code: str):
+    clean = sanitize_input(code, 128)
+    direct = db["keys"].get(clean)
+    if direct is not None:
+        return clean, direct
+    for stored_code, value in db["keys"].items():
+        if value.get("key") == clean or value.get("key_code") == clean:
+            return stored_code, value
+    return None, None
+
+async def get_key(code: str) -> dict | None:
+    return _find_key(await load_db(), code)[1]
 async def redeem_key(code: str, telegram_id: int) -> dict | None:
     async with _LOCK:
-        db = await load_db(); key = db["keys"].get(sanitize_input(code, 128))
+        db = await load_db(); stored_code, key = _find_key(db, code)
         if not key: return None
         if key.get("is_used"):
             # Повторный вход разрешен только тому Telegram-пользователю,
