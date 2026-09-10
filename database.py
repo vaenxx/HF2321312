@@ -188,10 +188,22 @@ async def update_user_setting(owner_id: int, name: str, value: bool) -> None:
     if user:
         user.setdefault("settings", {})[name] = bool(value)
         await save_db(db)
+
+async def record_moderation_event(owner_id: int, event_type: str, target: str, action: str, duration: str, reason: str) -> None:
+    db = await load_db(); user_id = str(owner_id)
+    bucket = "punishment_logs" if event_type == "punishment" else "check_logs"
+    db.setdefault(bucket, {}).setdefault(user_id, []).append({"target": target, "action": action, "duration": duration, "reason": reason, "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    stats = db["stats"].setdefault(user_id, {"user_id": owner_id, "bans": 0, "mutes": 0, "checks": 0})
+    if event_type == "punishment": stats["mutes" if action == "Мут" else "bans"] = stats.get("mutes" if action == "Мут" else "bans", 0) + 1
+    else: stats["checks"] = stats.get("checks", 0) + 1
+    await save_db(db)
 async def get_latest_mod():
     mods=(await load_db())["mod_versions"]; return mods[-1] if mods else None
+async def get_all_mod_versions(): return list(reversed((await load_db())["mod_versions"]))
 async def save_mod_version(version_name,changelog,file_id,roles):
-    db=await load_db(); db["mod_versions"].append({"id":max([int(m.get("id",0)) for m in db["mod_versions"]],default=0)+1,"version_name":version_name,"changelog":changelog,"file_id":file_id,"allowed_roles":list(roles),"created_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S")}); await save_db(db)
+    db=await load_db()
+    if any(m.get("version_name", "").casefold() == str(version_name).casefold() for m in db["mod_versions"]): return False
+    db["mod_versions"].append({"id":max([int(m.get("id",0)) for m in db["mod_versions"]],default=0)+1,"version_name":version_name,"changelog":changelog,"file_id":file_id,"allowed_roles":list(roles),"created_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S")}); await save_db(db); return True
 async def delete_mod_version(mod_id): db=await load_db(); db["mod_versions"]=[m for m in db["mod_versions"] if m.get("id")!=mod_id]; await save_db(db)
 async def export_table_to_txt(table_name):
     filename = str(DB_PATH.parent / f"{sanitize_input(table_name,32)}.txt")
