@@ -30,6 +30,9 @@ async def activate_api(request: web.Request) -> web.Response:
         minecraft_username = db.sanitize_input(payload.get("minecraft_username"), 64)
         data = await db.load_db()
         key = data.get("keys", {}).get(code)
+        if key is None:
+            key = next((item for item in data.get("keys", {}).values()
+                        if item.get("key") == code or item.get("key_code") == code), None)
         if not key or not key.get("is_used"):
             return web.json_response({"ok": False, "error": "Ключ ещё не активирован в Telegram или не существует."}, status=403)
         owner_id = key.get("used_by")
@@ -85,6 +88,9 @@ async def heartbeat_api(request: web.Request) -> web.Response:
         code = db.sanitize_input(payload.get("code"), 128)
         data = await db.load_db()
         key = data.get("keys", {}).get(code)
+        if key is None:
+            key = next((item for item in data.get("keys", {}).values()
+                        if item.get("key") == code or item.get("key_code") == code), None)
         owner_id = key.get("used_by") if key else None
         user = data.get("users", {}).get(str(owner_id)) if owner_id is not None else None
         if not key or not key.get("is_used") or not user or not user.get("is_approved") or user.get("is_banned") or user.get("client_kicked"):
