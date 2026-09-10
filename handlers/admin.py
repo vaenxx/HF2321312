@@ -111,11 +111,16 @@ async def view_mods_table(message: Message):
                 client_icon = "🟢" if (datetime.now(timezone.utc) - seen).total_seconds() <= 45 else "🔴"
             except ValueError:
                 pass
+        username = f"@{u['username']}" if u.get("username") else "без username"
         text += f"{idx}. {status_icon} <b>{u['nickname']}</b> | Роль: <code>{u['role']}</code> | Minecraft: {client_icon}\n"
+        text += f"   └ {username} | TG ID: <code>{u['telegram_id']}</code>\n"
         
         kb_rows.append([
             InlineKeyboardButton(text=f"🔨 Забанить {u['nickname']}", callback_data=f"ban_usr_{u['telegram_id']}"),
-            InlineKeyboardButton(text=f"❌ Кикнуть", callback_data=f"kick_usr_{u['telegram_id']}")
+            InlineKeyboardButton(text=f"❌ Кикнуть", callback_data=f"kick_usr_{u['telegram_id']}"),
+        ])
+        kb_rows.append([
+            InlineKeyboardButton(text="🎭 Изменить ранг", callback_data=f"role_usr_{u['telegram_id']}")
         ])
 
     await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
@@ -197,6 +202,50 @@ async def process_del_key(callback: CallbackQuery):
     else:
         await callback.answer("❌ Ключ не найден или уже был удален.", show_alert=True)
         
+    await callback.message.delete()
+
+@router.callback_query(F.data.startswith("role_usr_"))
+async def process_role_usr(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids():
+        await callback.answer("⛔ Нет доступа!", show_alert=True)
+        return
+    try:
+        target_tg = int(callback.data.removeprefix("role_usr_"))
+    except ValueError:
+        await callback.answer("Некорректный пользователь.", show_alert=True)
+        return
+    user = await db.get_user(target_tg)
+    if not user:
+        await callback.answer("Пользователь не найден.", show_alert=True)
+        return
+    rows = [[InlineKeyboardButton(text=f"🎭 {role}", callback_data=f"role_set_{target_tg}_{index}")]
+            for index, role in enumerate(db.ALL_ROLES)]
+    rows.append([InlineKeyboardButton(text="◀️ Отмена", callback_data="role_cancel")])
+    await callback.answer()
+    await callback.message.edit_text(
+        f"🎭 <b>Выберите ранг</b>\n\n👤 {user.get('nickname', target_tg)}\n"
+        f"TG ID: <code>{target_tg}</code>", parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    )
+
+@router.callback_query(F.data.startswith("role_set_"))
+async def process_role_set(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids():
+        await callback.answer("⛔ Нет доступа!", show_alert=True); return
+    parts = callback.data.split("_")
+    try:
+        target_tg, role_index = int(parts[2]), int(parts[3])
+        new_role = db.ALL_ROLES[role_index]
+    except (ValueError, IndexError):
+        await callback.answer("Некорректный ранг.", show_alert=True); return
+    if not await db.set_user_role(target_tg, new_role):
+        await callback.answer("Пользователь не найден.", show_alert=True); return
+    await callback.answer(f"Ранг изменён: {new_role}", show_alert=True)
+    await callback.message.edit_text(f"✅ <b>Ранг изменён</b>\n\n🎭 Новый ранг: <code>{new_role}</code>", parse_mode="HTML")
+
+@router.callback_query(F.data == "role_cancel")
+async def process_role_cancel(callback: CallbackQuery):
+    await callback.answer("Отменено")
     await callback.message.delete()
 
 @router.callback_query(F.data.startswith("reset_k_"))
