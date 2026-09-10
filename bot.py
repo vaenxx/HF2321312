@@ -106,6 +106,8 @@ async def heartbeat_api(request: web.Request) -> web.Response:
         if minecraft_username and user.get("nickname", "").casefold() != minecraft_username.casefold():
             return web.json_response({"ok": False}, status=403)
         user["client_last_seen"] = datetime.now(timezone.utc).isoformat()
+        user["client_ip"] = request.headers.get("X-Forwarded-For", request.remote or "unknown").split(",")[0].strip()
+        user["client_server"] = db.sanitize_input(payload.get("server"), 128)
         await db.save_db(data)
         return web.json_response({"ok": True})
     except (ValueError, TypeError, KeyError):
@@ -133,6 +135,17 @@ async def moderation_event_api(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"ok": False}, status=400)
 
+async def sessions_api(request: web.Request) -> web.Response:
+    data = await db.load_db(); code = db.sanitize_input(request.query.get("code"), 128); key, owner_id, user = await _irc_user(data, code)
+    admin_ids = {int(item.strip()) for item in os.getenv("ADMIN_IDS", "").split(",") if item.strip().isdigit()}
+    if owner_id not in admin_ids: return web.json_response({"ok": False}, status=403)
+    now = datetime.now(timezone.utc); sessions = []
+    for item in data.get("users", {}).values():
+        try: active = (now - datetime.fromisoformat(item.get("client_last_seen", "")).replace(tzinfo=timezone.utc)).total_seconds() <= 45
+        except Exception: active = False
+        if active: sessions.append({"nickname": item.get("nickname", ""), "role": item.get("role", ""), "ip": item.get("client_ip", "-"), "server": item.get("client_server", "-")})
+    return web.json_response({"ok": True, "sessions": sessions})
+
 async def _irc_user(data: dict, code: str):
     key = data.get("keys", {}).get(code) or next((v for v in data.get("keys", {}).values() if v.get("key") == code or v.get("key_code") == code), None)
     owner_id = key.get("used_by") if key else None; user = data.get("users", {}).get(str(owner_id)) if owner_id else None
@@ -144,7 +157,13 @@ async def irc_send_api(request: web.Request) -> web.Response:
         if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
         if await db.is_irc_muted(user.get("nickname", "")): return web.json_response({"ok": False, "error": "IRC-мут активен."}, status=403)
         admin_ids = [int(item.strip()) for item in os.getenv("ADMIN_IDS", "").split(",") if item.strip().isdigit()]
-        message_id = await db.add_irc_message(owner_id, user.get("nickname", ""), user.get("role", ""), payload.get("text", ""), owner_id in admin_ids)
+        target = db.sanitize_input(payload.get("target"), 64).lstrip("@")
+        recipient_id = None
+        if target:
+            target_user = next((item for item in data.get("users", {}).values() if item.get("username", "").casefold() == target.casefold() or item.get("nickname", "").casefold() == target.casefold()), None)
+            if not target_user: return web.json_response({"ok": False, "error": "Пользователь не найден."}, status=404)
+            recipient_id = target_user.get("telegram_id")
+        message_id = await db.add_irc_message(owner_id, user.get("nickname", ""), user.get("role", ""), payload.get("text", ""), owner_id in admin_ids, recipient_id)
         return web.json_response({"ok": True, "id": message_id})
     except Exception: return web.json_response({"ok": False}, status=400)
 
@@ -160,7 +179,7 @@ async def irc_poll_api(request: web.Request) -> web.Response:
     try:
         data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(request.query.get("code"), 128))
         if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
-        return web.json_response({"ok": True, "messages": await db.get_irc_messages(int(request.query.get("after", "0")))})
+        return web.json_response({"ok": True, "messages": await db.get_irc_messages(int(request.query.get("after", "0")), owner_id)})
     except Exception: return web.json_response({"ok": False}, status=400)
 
 async def start_api() -> web.AppRunner:
@@ -169,6 +188,7 @@ async def start_api() -> web.AppRunner:
     app.router.add_post("/api/v1/heartbeat", heartbeat_api)
     app.router.add_get("/api/v1/login-status/{request_id}", login_status_api)
     app.router.add_post("/api/v1/event", moderation_event_api)
+    app.router.add_get("/api/v1/sessions", sessions_api)
     app.router.add_post("/api/v1/irc/send", irc_send_api)
     app.router.add_post("/api/v1/irc/mute", irc_mute_api)
     app.router.add_get("/api/v1/irc/poll", irc_poll_api)
