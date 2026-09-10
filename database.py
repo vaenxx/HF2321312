@@ -7,8 +7,10 @@ import aiofiles
 _DATA_DIR = os.getenv("DATA_DIR", "").strip()
 DB_PATH = (Path(_DATA_DIR) / "database.json") if _DATA_DIR else (Path(__file__).resolve().parent / "database.json")
 _LOCK = asyncio.Lock()
-ADMIN_ROLES = ["Высшая Администрация", "Куратор", "Гл.Модератор", "Спектатор"]
-ALL_ROLES = ["Стажер", "Модератор", "Гл.Модератор", "Куратор", "Высшая Администрация", "Спектатор"]
+ADMIN_ROLES = []
+ALL_ROLES = ["HW: Стажер", "HW: Мл. Сотрудник", "HW: Сотрудник", "HW: Мл.Спектатор", "HW: Спектатор", "HW: Ст.Сотрудник",
+             "FT: Стажер", "FT: Staff", "FT: Агент", "Зам Куратора", "Куратор", "Админ", "СтАдмин", "Владелец"]
+ALL_MODES = ["FunTime", "HolyWorld", "ReallyWorld"]
 
 def _default() -> dict[str, Any]: return {"users": {}, "keys": {}, "applications": [], "mod_versions": [], "stats": {}}
 def sanitize_input(text: str | None, max_length: int = 100) -> str: return str(text or "").strip()[:max_length]
@@ -17,6 +19,8 @@ def _normalize(data: dict | None) -> dict:
     for k, v in _default().items():
         if not isinstance(out.get(k), type(v)): out[k] = v.copy() if isinstance(v, dict) else []
     for code, key in out["keys"].items(): key.setdefault("key_code", code); key.setdefault("days", 30); key.setdefault("is_used", 0)
+    for user in out["users"].values():
+        user.setdefault("modes", [user.get("mode", "HolyWorld")])
     # Migrate keys activated by older bot versions: bind them to the unique
     # profile with the same target nickname when no owner was stored yet.
     for code, key in out["keys"].items():
@@ -114,7 +118,7 @@ async def create_key(target_nickname, role, mode, days):
 async def get_user(tg): return (await load_db())["users"].get(str(tg))
 async def get_all_users(limit=15, offset=0): return list((await load_db())["users"].values())[offset:offset+limit]
 async def create_user(telegram_id, username, nickname, role, mode, is_approved=0, days=0, key_code=""):
-    db=await load_db(); old=db["users"].get(str(telegram_id), {}); db["users"][str(telegram_id)]={**old,"telegram_id":telegram_id,"username":sanitize_input(username,64),"nickname":sanitize_input(nickname,32),"role":role,"mode":mode,"discord_id":old.get("discord_id",""),"discord_tag":old.get("discord_tag",""),"is_approved":int(is_approved),"is_banned":old.get("is_banned",0),"days":days,"key_code":key_code,"created_at":old.get("created_at",datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}; db["stats"].setdefault(str(telegram_id),{"user_id":telegram_id,"bans":0,"mutes":0,"checks":0}); await save_db(db)
+    db=await load_db(); old=db["users"].get(str(telegram_id), {}); db["users"][str(telegram_id)]={**old,"telegram_id":telegram_id,"username":sanitize_input(username,64),"nickname":sanitize_input(nickname,32),"role":role,"mode":mode,"modes":old.get("modes", [mode]),"discord_id":old.get("discord_id",""),"discord_tag":old.get("discord_tag",""),"is_approved":int(is_approved),"is_banned":old.get("is_banned",0),"days":days,"key_code":key_code,"created_at":old.get("created_at",datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}; db["stats"].setdefault(str(telegram_id),{"user_id":telegram_id,"bans":0,"mutes":0,"checks":0}); await save_db(db)
 async def approve_user(tg):
     db=await load_db(); user=db["users"].get(str(tg));
     if user: user["is_approved"]=1; [a.update(status="approved") for a in db["applications"] if a.get("user_id")==tg and a.get("status")=="pending"]; await save_db(db)
@@ -129,6 +133,19 @@ async def set_user_role(tg: int, role: str) -> bool:
     user["role"] = role
     await save_db(db)
     return True
+
+async def toggle_user_mode(tg: int, mode: str) -> tuple[bool, list[str]]:
+    db = await load_db(); user = db["users"].get(str(tg))
+    if not user or mode not in ALL_MODES: return False, []
+    modes = [item for item in user.get("modes", [user.get("mode", mode)]) if item in ALL_MODES]
+    if mode in modes:
+        if len(modes) == 1: return True, modes
+        modes.remove(mode)
+    else:
+        modes.append(mode)
+    user["modes"] = modes; user["mode"] = modes[0]
+    await save_db(db)
+    return True, modes
 async def update_discord(tg, tag): db=await load_db(); db["users"].get(str(tg), {}).update(discord_tag=sanitize_input(tag,50)); await save_db(db)
 async def get_user_stats(tg): return (await load_db())["stats"].get(str(tg),{"bans":0,"mutes":0,"checks":0})
 async def ban_user(tg): db=await load_db(); db["users"].get(str(tg), {}).update(is_banned=1); await save_db(db)
