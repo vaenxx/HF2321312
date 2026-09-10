@@ -121,6 +121,14 @@ async def approve_user(tg):
 async def set_user_key(tg, code, days=None):
     db=await load_db(); user=db["users"].get(str(tg));
     if user: user["key_code"]=code; user["days"]=days if days is not None else user.get("days",0); user["activated_at"]=datetime.now().strftime("%Y-%m-%d %H:%M:%S"); await save_db(db)
+
+async def set_user_role(tg: int, role: str) -> bool:
+    db = await load_db(); user = db["users"].get(str(tg))
+    if not user or role not in ALL_ROLES:
+        return False
+    user["role"] = role
+    await save_db(db)
+    return True
 async def update_discord(tg, tag): db=await load_db(); db["users"].get(str(tg), {}).update(discord_tag=sanitize_input(tag,50)); await save_db(db)
 async def get_user_stats(tg): return (await load_db())["stats"].get(str(tg),{"bans":0,"mutes":0,"checks":0})
 async def ban_user(tg): db=await load_db(); db["users"].get(str(tg), {}).update(is_banned=1); await save_db(db)
