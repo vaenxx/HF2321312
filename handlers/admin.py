@@ -120,7 +120,8 @@ async def view_mods_table(message: Message):
             InlineKeyboardButton(text=f"❌ Кикнуть", callback_data=f"kick_usr_{u['telegram_id']}"),
         ])
         kb_rows.append([
-            InlineKeyboardButton(text="🎭 Изменить ранг", callback_data=f"role_usr_{u['telegram_id']}")
+            InlineKeyboardButton(text="🎭 Изменить ранг", callback_data=f"role_usr_{u['telegram_id']}"),
+            InlineKeyboardButton(text="🎮 Режимы", callback_data=f"mode_usr_{u['telegram_id']}")
         ])
 
     await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
@@ -246,6 +247,45 @@ async def process_role_set(callback: CallbackQuery):
 @router.callback_query(F.data == "role_cancel")
 async def process_role_cancel(callback: CallbackQuery):
     await callback.answer("Отменено")
+    await callback.message.delete()
+
+@router.callback_query(F.data.startswith("mode_usr_"))
+async def process_mode_usr(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids():
+        await callback.answer("⛔ Нет доступа!", show_alert=True); return
+    try: target_tg = int(callback.data.removeprefix("mode_usr_"))
+    except ValueError:
+        await callback.answer("Некорректный пользователь.", show_alert=True); return
+    user = await db.get_user(target_tg)
+    if not user:
+        await callback.answer("Пользователь не найден.", show_alert=True); return
+    modes = set(user.get("modes", [user.get("mode", "HolyWorld")]))
+    rows = [[InlineKeyboardButton(text=("✅ " if mode in modes else "⬜ ") + mode, callback_data=f"mode_set_{target_tg}_{index}")]
+            for index, mode in enumerate(db.ALL_MODES)]
+    rows.append([InlineKeyboardButton(text="◀️ Отмена", callback_data="mode_cancel")])
+    await callback.answer()
+    await callback.message.edit_text(f"🎮 <b>Режимы модератора</b>\n\n👤 {user.get('nickname', target_tg)}\nМожно выбрать несколько режимов.", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+@router.callback_query(F.data.startswith("mode_set_"))
+async def process_mode_set(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids():
+        await callback.answer("⛔ Нет доступа!", show_alert=True); return
+    parts = callback.data.split("_")
+    try: target_tg, index = int(parts[2]), int(parts[3]); mode = db.ALL_MODES[index]
+    except (ValueError, IndexError):
+        await callback.answer("Некорректный режим.", show_alert=True); return
+    ok, modes = await db.toggle_user_mode(target_tg, mode)
+    if not ok:
+        await callback.answer("Пользователь не найден.", show_alert=True); return
+    await callback.answer("Режимы обновлены")
+    rows = [[InlineKeyboardButton(text=("✅ " if item in modes else "⬜ ") + item, callback_data=f"mode_set_{target_tg}_{i}")]
+            for i, item in enumerate(db.ALL_MODES)]
+    rows.append([InlineKeyboardButton(text="◀️ Закрыть", callback_data="mode_cancel")])
+    await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+@router.callback_query(F.data == "mode_cancel")
+async def process_mode_cancel(callback: CallbackQuery):
+    await callback.answer("Готово")
     await callback.message.delete()
 
 @router.callback_query(F.data.startswith("reset_k_"))
