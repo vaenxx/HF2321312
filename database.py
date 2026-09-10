@@ -198,10 +198,10 @@ async def record_moderation_event(owner_id: int, event_type: str, target: str, a
     else: stats["checks"] = stats.get("checks", 0) + 1
     await save_db(db)
 
-async def add_irc_message(owner_id: int, nickname: str, role: str, text: str) -> int:
+async def add_irc_message(owner_id: int, nickname: str, role: str, text: str, is_admin: bool = False) -> int:
     db = await load_db(); messages = db.setdefault("irc_messages", [])
     message_id = max([int(item.get("id", 0)) for item in messages], default=0) + 1
-    messages.append({"id": message_id, "owner_id": owner_id, "nickname": nickname, "role": role, "text": sanitize_input(text, 500), "created_at": datetime.now().strftime("%H:%M:%S")})
+    messages.append({"id": message_id, "owner_id": owner_id, "nickname": nickname, "role": role, "is_admin": is_admin, "text": sanitize_input(text, 500), "created_at": datetime.now().strftime("%H:%M:%S")})
     db["irc_messages"] = messages[-500:]; await save_db(db); return message_id
 
 async def get_irc_messages(after_id: int = 0) -> list[dict]:
