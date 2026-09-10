@@ -143,7 +143,8 @@ async def irc_send_api(request: web.Request) -> web.Response:
         payload = await request.json(); data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
         if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
         if await db.is_irc_muted(user.get("nickname", "")): return web.json_response({"ok": False, "error": "IRC-мут активен."}, status=403)
-        message_id = await db.add_irc_message(owner_id, user.get("nickname", ""), user.get("role", ""), payload.get("text", ""))
+        admin_ids = [int(item.strip()) for item in os.getenv("ADMIN_IDS", "").split(",") if item.strip().isdigit()]
+        message_id = await db.add_irc_message(owner_id, user.get("nickname", ""), user.get("role", ""), payload.get("text", ""), owner_id in admin_ids)
         return web.json_response({"ok": True, "id": message_id})
     except Exception: return web.json_response({"ok": False}, status=400)
 
