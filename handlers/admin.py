@@ -139,6 +139,9 @@ async def process_ban_usr(callback: CallbackQuery):
         return
 
     target_tg = int(callback.data.split("_")[2])
+    if target_tg in get_admin_ids():
+        await callback.answer("⛔ Администратора нельзя забанить.", show_alert=True)
+        return
     await db.ban_user(target_tg)
     await callback.answer("🔒 Пользователь забанен!", show_alert=True)
     await callback.message.delete()
