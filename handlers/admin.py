@@ -141,12 +141,7 @@ async def view_mods_table(message: Message):
         text += f"   └ {username} | TG ID: <code>{u['telegram_id']}</code>\n"
         
         kb_rows.append([
-            InlineKeyboardButton(text=f"🔨 Забанить {u['nickname']}", callback_data=f"ban_usr_{u['telegram_id']}"),
-            InlineKeyboardButton(text=f"❌ Кикнуть", callback_data=f"kick_usr_{u['telegram_id']}"),
-        ])
-        kb_rows.append([
-            InlineKeyboardButton(text="🎭 Изменить ранг", callback_data=f"role_usr_{u['telegram_id']}"),
-            InlineKeyboardButton(text="🎮 Режимы", callback_data=f"mode_usr_{u['telegram_id']}")
+            InlineKeyboardButton(text=f"👤 Профиль {u['nickname']}", callback_data=f"profile_usr_{u['telegram_id']}")
         ])
 
     await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
@@ -232,6 +227,56 @@ async def process_del_key(callback: CallbackQuery):
         await callback.answer("❌ Ключ не найден или уже был удален.", show_alert=True)
         
     await callback.message.delete()
+
+@router.callback_query(F.data.startswith("profile_usr_"))
+async def moderator_profile(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    user = await db.get_user(int(callback.data.removeprefix("profile_usr_")))
+    if not user: return await callback.answer("Пользователь не найден.", show_alert=True)
+    tg = user["telegram_id"]
+    await callback.answer()
+    await callback.message.edit_text(f"👤 <b>Профиль модератора</b>\n\nНик: <code>{user.get('nickname','')}</code>\nUsername: @{user.get('username','—')}\nTG ID: <code>{tg}</code>\nРанг: <b>{user.get('role','')}</b>\nРежимы: <b>{', '.join(user.get('modes',[user.get('mode','')]))}</b>\nКлюч: <code>{user.get('key_code','не привязан')}</code>\nСрок: {user.get('days',0)} дней", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎭 Ранг", callback_data=f"role_usr_{tg}"), InlineKeyboardButton(text="🎮 Режимы", callback_data=f"mode_usr_{tg}")],
+        [InlineKeyboardButton(text="⏳ Продлить ключ", callback_data=f"extend_usr_{tg}"), InlineKeyboardButton(text="⛔ Деактивировать", callback_data=f"deactivate_usr_{tg}")],
+        [InlineKeyboardButton(text="📊 Наказания и проверки", callback_data=f"logs_usr_{tg}")],
+        [InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data=f"delete_usr_{tg}")]
+    ]))
+
+@router.callback_query(F.data.startswith("extend_usr_"))
+async def extend_user(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    tg = int(callback.data.removeprefix("extend_usr_")); rows = [[InlineKeyboardButton(text=f"{days} дней", callback_data=f"extend_set_{tg}_{days}")] for days in (7, 14, 30, 60, 90, 180, 365)]
+    await callback.answer(); await callback.message.edit_text("⏳ <b>Выберите новый срок ключа:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+@router.callback_query(F.data.startswith("extend_set_"))
+async def extend_user_set(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    _, _, tg, days = callback.data.split("_"); ok = await db.extend_user_key(int(tg), int(days)); await callback.answer("Ключ продлён" if ok else "Ключ не найден", show_alert=True); await callback.message.delete()
+
+@router.callback_query(F.data.startswith("deactivate_usr_"))
+async def deactivate_user(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    await db.deactivate_user_key(int(callback.data.removeprefix("deactivate_usr_"))); await callback.answer("Доступ деактивирован", show_alert=True); await callback.message.delete()
+
+@router.callback_query(F.data.startswith("delete_usr_"))
+async def delete_user_prompt(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    tg = callback.data.removeprefix("delete_usr_"); await callback.answer(); await callback.message.edit_text("🗑 <b>Удалить аккаунт вместе с его ключом?</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Удалить всё", callback_data=f"delete_set_{tg}_1"), InlineKeyboardButton(text="Оставить ключ", callback_data=f"delete_set_{tg}_0")]]))
+
+@router.callback_query(F.data.startswith("delete_set_"))
+async def delete_user_confirm(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    _, _, tg, key = callback.data.split("_"); await db.delete_user_account(int(tg), key == "1"); await callback.answer("Аккаунт удалён", show_alert=True); await callback.message.delete()
+
+@router.callback_query(F.data.startswith("logs_usr_"))
+async def moderator_logs(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    tg = int(callback.data.removeprefix("logs_usr_")); logs = await db.get_moderation_logs(tg)
+    if not logs: text = "📊 История наказаний и проверок пуста."
+    else:
+        text = "📊 <b>История действий</b>\n\n"
+        for item in logs[:15]: text += f"• {item.get('created_at','')} | {item.get('action','')} | <b>{item.get('target','')}</b> | {item.get('duration','—')} | {item.get('reason','—')}\n"
+    await callback.answer(); await callback.message.edit_text(text, parse_mode="HTML")
 
 @router.callback_query(F.data.startswith("role_usr_"))
 async def process_role_usr(callback: CallbackQuery):
@@ -372,6 +417,10 @@ async def process_accept_app(callback: CallbackQuery, bot):
     parts = callback.data.split("_")
     app_id = int(parts[2])
     user_id = int(parts[3])
+    if len(parts) == 4:
+        rows = [[InlineKeyboardButton(text=f"{days} дней", callback_data=f"app_accept_{app_id}_{user_id}_{days}")] for days in (7, 14, 30, 60, 90, 180, 365)]
+        await callback.answer(); await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)); return
+    selected_days = int(parts[4])
     
     user = await db.get_user(user_id)
     if not user:
@@ -383,8 +432,8 @@ async def process_accept_app(callback: CallbackQuery, bot):
     new_key = user.get("key_code", "")
     days = user.get("days", 30)
     if app and app.get("type") == "key_request":
-        new_key = await db.create_key(user["nickname"], user["role"], user["mode"], 30)
-        days = 30
+        new_key = await db.create_key(user["nickname"], user["role"], user["mode"], selected_days)
+        days = selected_days
         await db.set_user_key(user_id, new_key, days)
 
     await db.update_app_status(app_id, "approved")
