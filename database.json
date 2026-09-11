@@ -4,7 +4,7 @@
       "telegram_id": 7918461586,
       "username": "sovesz",
       "nickname": "sovesz",
-      "role": "Спектатор",
+      "role": "HW: Спектатор",
       "mode": "HolyWorld",
       "discord_id": "",
       "discord_tag": "",
@@ -13,7 +13,93 @@
       "created_at": "2026-01-01 00:00:00",
       "key_code": "HF-246B09FF2BAAB6AA921F394A227A63893EC4",
       "days": 30,
-      "client_last_seen": "2026-09-10T14:41:49.030977+00:00"
+      "client_last_seen": "2026-09-11T09:20:01.477750+00:00",
+      "modes": [
+        "HolyWorld"
+      ],
+      "client_kicked": false,
+      "client_ip": "94.156.131.235",
+      "client_server": ""
+    },
+    "1299148508": {
+      "telegram_id": 1299148508,
+      "username": "hezoky",
+      "nickname": "LunarGvard",
+      "role": "HW: Сотрудник",
+      "mode": "HolyWorld",
+      "modes": [
+        "HolyWorld"
+      ],
+      "discord_id": "",
+      "discord_tag": "",
+      "is_approved": 1,
+      "is_banned": 0,
+      "days": 14,
+      "key_code": "HF-EAF79FA26C04",
+      "created_at": "2026-09-11 07:51:10",
+      "client_kicked": false,
+      "client_last_seen": "2026-09-11T09:47:56.151542+00:00",
+      "client_ip": "94.156.131.235",
+      "client_server": "svz.holyfake.su"
+    },
+    "8294178502": {
+      "telegram_id": 8294178502,
+      "username": "shampuh10",
+      "nickname": "tgSteam67",
+      "role": "HW: Спектатор",
+      "mode": "HolyWorld",
+      "modes": [
+        "HolyWorld"
+      ],
+      "discord_id": "",
+      "discord_tag": "",
+      "is_approved": 1,
+      "is_banned": 0,
+      "days": 14,
+      "key_code": "HF-31D47D829A56",
+      "created_at": "2026-09-11 07:51:32",
+      "client_kicked": false,
+      "client_last_seen": "2026-09-11T08:36:22.114818+00:00",
+      "client_ip": "94.156.131.235",
+      "client_server": ""
+    },
+    "8129325290": {
+      "telegram_id": 8129325290,
+      "username": "arbuzik690",
+      "nickname": "MerinGix3",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "modes": [
+        "HolyWorld"
+      ],
+      "discord_id": "",
+      "discord_tag": "",
+      "is_approved": 1,
+      "is_banned": 0,
+      "days": 14,
+      "key_code": "HF-FF95DE9C7C86",
+      "created_at": "2026-09-11 08:07:57",
+      "client_kicked": false,
+      "client_last_seen": "2026-09-11T09:48:03.061776+00:00",
+      "client_ip": "94.156.131.235",
+      "client_server": ""
+    },
+    "8205450482": {
+      "telegram_id": 8205450482,
+      "username": "",
+      "nickname": "NeKodex",
+      "role": "HW: Ст.Сотрудник",
+      "mode": "HolyWorld",
+      "modes": [
+        "HolyWorld"
+      ],
+      "discord_id": "",
+      "discord_tag": "",
+      "is_approved": 1,
+      "is_banned": 0,
+      "days": 14,
+      "key_code": "HF-4C4A512F161A",
+      "created_at": "2026-09-11 08:24:40"
     }
   },
   "keys": {
@@ -40,6 +126,54 @@
       "created_at": "2026-09-10 17:03:09",
       "used_by": 5729802563,
       "used_at": "2026-09-10 17:03:17"
+    },
+    "HF-EAF79FA26C04": {
+      "key": "HF-EAF79FA26C04",
+      "key_code": "HF-EAF79FA26C04",
+      "target_nickname": "LunarGvard",
+      "role": "Стажер",
+      "mode": "HolyWorld",
+      "days": 14,
+      "is_used": 1,
+      "created_at": "2026-09-11 07:50:40",
+      "used_by": 1299148508,
+      "used_at": "2026-09-11 07:51:10"
+    },
+    "HF-31D47D829A56": {
+      "key": "HF-31D47D829A56",
+      "key_code": "HF-31D47D829A56",
+      "target_nickname": "tgSteam67",
+      "role": "Стажер",
+      "mode": "HolyWorld",
+      "days": 14,
+      "is_used": 1,
+      "created_at": "2026-09-11 07:51:16",
+      "used_by": 8294178502,
+      "used_at": "2026-09-11 07:51:32"
+    },
+    "HF-FF95DE9C7C86": {
+      "key": "HF-FF95DE9C7C86",
+      "key_code": "HF-FF95DE9C7C86",
+      "target_nickname": "MerinGix3",
+      "role": "Стажер",
+      "mode": "HolyWorld",
+      "days": 14,
+      "is_used": 1,
+      "created_at": "2026-09-11 08:07:17",
+      "used_by": 8129325290,
+      "used_at": "2026-09-11 08:07:57"
+    },
+    "HF-4C4A512F161A": {
+      "key": "HF-4C4A512F161A",
+      "key_code": "HF-4C4A512F161A",
+      "target_nickname": "NeKodex",
+      "role": "Стажер",
+      "mode": "HolyWorld",
+      "days": 14,
+      "is_used": 1,
+      "created_at": "2026-09-11 08:23:46",
+      "used_by": 8205450482,
+      "used_at": "2026-09-11 08:24:40"
     }
   },
   "applications": [
