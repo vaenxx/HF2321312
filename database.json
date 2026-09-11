@@ -13,13 +13,14 @@
       "created_at": "2026-01-01 00:00:00",
       "key_code": "HF-246B09FF2BAAB6AA921F394A227A63893EC4",
       "days": 30,
-      "client_last_seen": "2026-09-11T10:41:23.960901+00:00",
+      "client_last_seen": "2026-09-11T21:58:38.057253+00:00",
       "modes": [
         "HolyWorld"
       ],
       "client_kicked": false,
       "client_ip": "94.156.131.235",
-      "client_server": "svz.holyfake.su"
+      "client_server": "svz.holyfake.su",
+      "irc_title": "&#FF0000/&#EF0000b&#E00000a&#D00000n &#B00000a&#A10000l&#910000l"
     },
     "1299148508": {
       "telegram_id": 1299148508,
@@ -80,7 +81,7 @@
       "key_code": "HF-FF95DE9C7C86",
       "created_at": "2026-09-11 08:07:57",
       "client_kicked": false,
-      "client_last_seen": "2026-09-11T10:45:23.167162+00:00",
+      "client_last_seen": "2026-09-11T22:01:08.644314+00:00",
       "client_ip": "94.156.131.235",
       "client_server": ""
     },
@@ -100,6 +101,28 @@
       "days": 14,
       "key_code": "HF-4C4A512F161A",
       "created_at": "2026-09-11 08:24:40"
+    },
+    "8291334769": {
+      "telegram_id": 8291334769,
+      "username": "lunar_cl1ent",
+      "nickname": "burbenalix",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "modes": [
+        "HolyWorld"
+      ],
+      "discord_id": "",
+      "discord_tag": "",
+      "is_approved": 1,
+      "is_banned": 0,
+      "days": 14,
+      "key_code": "HF-23E04F265E5E",
+      "created_at": "2026-09-11 21:53:03",
+      "client_kicked": false,
+      "client_last_seen": "2026-09-11T22:00:53.549687+00:00",
+      "client_ip": "94.156.131.235",
+      "client_server": "mc.holyfake.su",
+      "irc_title": "&#BB5CFF/&#CC4DF2s&#DD3FE6p&#EE30D9e&#FF21CCc"
     }
   },
   "keys": {
@@ -175,15 +198,17 @@
       "used_by": 8205450482,
       "used_at": "2026-09-11 08:24:40"
     },
-    "HF-322FB1D9861A": {
-      "key": "HF-322FB1D9861A",
-      "key_code": "HF-322FB1D9861A",
+    "HF-23E04F265E5E": {
+      "key": "HF-23E04F265E5E",
+      "key_code": "HF-23E04F265E5E",
       "target_nickname": "burbenalix",
       "role": "Стажер",
       "mode": "HolyWorld",
       "days": 14,
-      "is_used": 0,
-      "created_at": "2026-09-11 10:24:37"
+      "is_used": 1,
+      "created_at": "2026-09-11 21:52:09",
+      "used_by": 8291334769,
+      "used_at": "2026-09-11 21:53:03"
     }
   },
   "applications": [
