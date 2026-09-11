@@ -1,316 +1,275 @@
-import asyncio, json, os, tempfile, uuid, logging, shutil
-from datetime import datetime
-from pathlib import Path
-from typing import Any
-import aiofiles
+import asyncio
+import logging
+import os
+from datetime import datetime, timezone
 from dotenv import load_dotenv
+import aiohttp
+from aiohttp import web
 
-# Load hosting/local variables before resolving the persistent database path.
-load_dotenv(Path(__file__).resolve().parent / ".env")
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
 
-_DATA_DIR = os.getenv("DATA_DIR", "").strip()
-DB_PATH = (Path(_DATA_DIR) / "database.json") if _DATA_DIR else (Path(__file__).resolve().parent / "database.json")
-SOURCE_DB_PATH = Path(__file__).resolve().parent / "database.json"
-_LOCK = asyncio.Lock()
-ADMIN_ROLES = []
-ALL_ROLES = ["HW: Стажер", "HW: Мл. Сотрудник", "HW: Сотрудник", "HW: Мл.Спектатор", "HW: Спектатор", "HW: Ст.Сотрудник",
-             "FT: Стажер", "FT: Staff", "FT: Агент", "Зам Куратора", "Куратор", "Админ", "СтАдмин", "Владелец"]
-ALL_MODES = ["FunTime", "HolyWorld", "ReallyWorld"]
+import database as db
+from middlewares.antispam import AntiSpamMiddleware
+from handlers import auth, profile, mod, admin
 
-def _default() -> dict[str, Any]: return {"users": {}, "keys": {}, "applications": [], "mod_versions": [], "stats": {}}
-def sanitize_input(text: str | None, max_length: int = 100) -> str: return str(text or "").strip()[:max_length]
-def _normalize(data: dict | None) -> dict:
-    out = _default(); out.update(data or {})
-    for k, v in _default().items():
-        if not isinstance(out.get(k), type(v)): out[k] = v.copy() if isinstance(v, dict) else []
-    for code, key in out["keys"].items(): key.setdefault("key_code", code); key.setdefault("days", 30); key.setdefault("is_used", 0)
-    for user in out["users"].values():
-        user.setdefault("modes", [user.get("mode", "HolyWorld")])
-    # Migrate keys activated by older bot versions: bind them to the unique
-    # profile with the same target nickname when no owner was stored yet.
-    for code, key in out["keys"].items():
-        if key.get("is_used") and not key.get("used_by"):
-            matches = [(uid, user) for uid, user in out["users"].items()
-                       if user.get("nickname") == key.get("target_nickname")]
-            if len(matches) == 1:
-                uid, user = matches[0]
-                key["used_by"] = int(uid)
-                user.setdefault("key_code", code)
-                user.setdefault("days", key.get("days", 30))
-    for mod in out["mod_versions"]:
-        mod.setdefault("allowed_roles", mod.get("roles", ALL_ROLES.copy())); mod.setdefault("created_at", "")
-    return out
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-async def load_db() -> dict:
-    if not DB_PATH.exists():
-        data = _default(); await save_db(data); return data
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_HOST = os.getenv("HF_API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("PORT", os.getenv("HF_API_PORT", "3000")))
+_ACTIVATE_ATTEMPTS: dict[str, float] = {}
+
+logging.basicConfig(level=logging.INFO)
+
+async def activate_api(request: web.Request) -> web.Response:
+    """Validates only keys already activated in Telegram and returns the bound profile."""
     try:
-        async with aiofiles.open(DB_PATH, "r", encoding="utf-8") as f: content = await f.read()
-        return _normalize(json.loads(content) if content.strip() else None)
-    except (OSError, json.JSONDecodeError): return _default()
+        payload = await request.json()
+        code = db.sanitize_input(payload.get("code"), 128)
+        minecraft_username = db.sanitize_input(payload.get("minecraft_username"), 64)
+        logging.info("[AUDIT] minecraft_auth username=%s code=%s", minecraft_username or "-", "<hidden>")
+        data = await db.load_db()
+        key = data.get("keys", {}).get(code)
+        if key is None:
+            key = next((item for item in data.get("keys", {}).values()
+                        if item.get("key") == code or item.get("key_code") == code), None)
+        if not key or not key.get("is_used") or key.get("is_active", 1) == 0:
+            logging.warning("[AUDIT] minecraft_auth rejected reason=invalid_or_unused")
+            return web.json_response({"ok": False, "error": "Ключ ещё не активирован в Telegram или не существует."}, status=403)
+        owner_id = key.get("used_by")
+        user = data.get("users", {}).get(str(owner_id)) if owner_id is not None else None
+        if not user or not user.get("is_approved") or user.get("is_banned"):
+            logging.warning("[AUDIT] minecraft_auth rejected owner_id=%s reason=profile_denied", owner_id)
+            return web.json_response({"ok": False, "error": "Профиль ключа не одобрен или заблокирован."}, status=403)
+        expected_name = (user.get("nickname") or key.get("target_nickname", "")).strip().casefold()
+        if minecraft_username and expected_name and minecraft_username.casefold() != expected_name:
+            return web.json_response({"ok": False, "error": f"Используйте Minecraft-ник {user.get('nickname', '')}."}, status=403)
+        ip = request.headers.get("X-Forwarded-For", request.remote or "unknown").split(",")[0].strip()
+        now = datetime.now(timezone.utc).timestamp()
+        if now - _ACTIVATE_ATTEMPTS.get(ip, 0.0) < 3:
+            return web.json_response({"ok": False, "error": "Слишком частые попытки. Подождите несколько секунд."}, status=429)
+        _ACTIVATE_ATTEMPTS[ip] = now
+        location = await resolve_location(ip)
+        request_id = await db.create_login_request(owner_id, code, ip, location)
+        logging.info("[AUDIT] login_request created request_id=%s owner_id=%s ip=%s location=%s", request_id, owner_id, ip, location)
+        try:
+            await bot_instance.send_message(owner_id,
+                "🔐 <b>Попытка входа в HF-Moderation</b>\n\n"
+                f"🌐 IP: <code>{ip}</code>\n📍 Место: <b>{location}</b>\n"
+                f"🎮 Minecraft: <code>{minecraft_username or 'не указан'}</code>\n\n"
+                "Разрешить вход?",
+                parse_mode="HTML", reply_markup=login_request_kb(request_id))
+        except Exception:
+            return web.json_response({"ok": False, "error": "Не удалось доставить запрос в Telegram."}, status=503)
+        return web.json_response({"ok": False, "pending": True, "request_id": request_id,
+                                  "error": "Ожидается подтверждение входа в Telegram."}, status=202)
+    except (ValueError, TypeError, KeyError):
+        return web.json_response({"ok": False, "error": "Некорректный запрос."}, status=400)
 
-async def _write(data: dict) -> None:
-    if DB_PATH.exists():
-        backup = DB_PATH.with_suffix(".json.bak")
-        try: shutil.copy2(DB_PATH, backup)
-        except OSError: pass
-    fd, name = tempfile.mkstemp(prefix="database.", suffix=".tmp", dir=DB_PATH.parent); os.close(fd)
+def login_request_kb(request_id: str):
+    return {"inline_keyboard": [[{"text": "✅ Принять", "callback_data": f"login_approve_{request_id}"},
+                                  {"text": "❌ Отклонить", "callback_data": f"login_reject_{request_id}"}]]}
+
+bot_instance = None
+
+async def resolve_location(ip: str) -> str:
+    if ip in {"127.0.0.1", "::1", "unknown"} or ip.startswith(("10.", "192.168.", "172.16.")):
+        return "🏠 локальная сеть"
     try:
-        async with aiofiles.open(name, "w", encoding="utf-8") as f: await f.write(json.dumps(_normalize(data), ensure_ascii=False, indent=2))
-        os.replace(name, DB_PATH)
-    finally:
-        if os.path.exists(name): os.unlink(name)
+        timeout = aiohttp.ClientTimeout(total=2)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(f"https://ipapi.co/{ip}/json/") as response:
+                data = await response.json()
+        country = data.get("country_name") or "страна не определена"
+        code = (data.get("country_code") or "").upper()
+        emoji = "".join(chr(127397 + ord(char)) for char in code) if len(code) == 2 else "🌐"
+        city = data.get("city") or "город не определён"
+        return f"{emoji} {country}, {city}"
+    except Exception:
+        return "🌐 страна не определена"
 
-async def save_db(data: dict) -> None:
-    async with _LOCK: await _write(data)
-async def init_db() -> None:
-    """Initialize persistent storage without destroying an existing database."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if not DB_PATH.exists():
-        backup = DB_PATH.with_suffix(".json.bak")
-        if backup.exists():
-            shutil.copy2(backup, DB_PATH)
-        elif SOURCE_DB_PATH.exists() and SOURCE_DB_PATH.resolve() != DB_PATH.resolve():
-            shutil.copy2(SOURCE_DB_PATH, DB_PATH)
-        else:
-            await save_db(_default())
-            return
-    # A deployment can copy a fresh template database over the persistent file.
-    # If that template is empty, prefer the previous atomic-write backup.
-    backup = DB_PATH.with_suffix(".json.bak")
+async def heartbeat_api(request: web.Request) -> web.Response:
     try:
-        async with aiofiles.open(DB_PATH, "r", encoding="utf-8") as file:
-            content = await file.read()
-        data = _normalize(json.loads(content) if content.strip() else None)
-        if not data.get("users") and not data.get("keys") and backup.exists():
-            async with aiofiles.open(backup, "r", encoding="utf-8") as file:
-                previous = _normalize(json.loads(await file.read()))
-            if previous.get("users") or previous.get("keys"):
-                shutil.copy2(backup, DB_PATH)
-                data = previous
-    except (OSError, json.JSONDecodeError):
-        if backup.exists():
-            shutil.copy2(backup, DB_PATH)
-            return
-        raise RuntimeError(f"База данных повреждена: {DB_PATH}")
-    # Normalize old records in place, preserving all user/key/event data.
-    await save_db(data)
-async def auto_reload_db_task(interval: int = 10) -> None:
-    while True:
-        await asyncio.sleep(interval)
+        payload = await request.json()
+        code = db.sanitize_input(payload.get("code"), 128)
+        minecraft_username = db.sanitize_input(payload.get("minecraft_username"), 64)
+        data = await db.load_db()
+        key = data.get("keys", {}).get(code)
+        if key is None:
+            key = next((item for item in data.get("keys", {}).values()
+                        if item.get("key") == code or item.get("key_code") == code), None)
+        owner_id = key.get("used_by") if key else None
+        user = data.get("users", {}).get(str(owner_id)) if owner_id is not None else None
+        if not key or not key.get("is_used") or key.get("is_active", 1) == 0 or not user or not user.get("is_approved") or user.get("is_banned") or user.get("client_kicked"):
+            return web.json_response({"ok": False}, status=403)
+        if minecraft_username and user.get("nickname", "").casefold() != minecraft_username.casefold():
+            return web.json_response({"ok": False}, status=403)
+        user["client_last_seen"] = datetime.now(timezone.utc).isoformat()
+        user["client_ip"] = request.headers.get("X-Forwarded-For", request.remote or "unknown").split(",")[0].strip()
+        user["client_server"] = db.sanitize_input(payload.get("server"), 128)
+        await db.save_db(data)
+        return web.json_response({"ok": True})
+    except (ValueError, TypeError, KeyError):
+        return web.json_response({"ok": False}, status=400)
 
-def _find_key(db: dict, code: str):
-    clean = sanitize_input(code, 128)
-    direct = db["keys"].get(clean)
-    if direct is not None:
-        return clean, direct
-    for stored_code, value in db["keys"].items():
-        if value.get("key") == clean or value.get("key_code") == clean:
-            return stored_code, value
-    return None, None
+async def login_status_api(request: web.Request) -> web.Response:
+    item = await db.get_login_request(db.sanitize_input(request.match_info.get("request_id"), 64))
+    if not item:
+        return web.json_response({"ok": False, "error": "Запрос не найден."}, status=404)
+    if item.get("status") != "approved":
+        return web.json_response({"ok": False, "pending": item.get("status") == "pending", "error": "Вход отклонён." if item.get("status") == "rejected" else "Ожидается подтверждение."}, status=403)
+    data = await db.load_db(); user = data.get("users", {}).get(str(item.get("owner_id")), {})
+    key = data.get("keys", {}).get(item.get("key_code"), {})
+    return web.json_response({"ok": True, "telegram_id": item.get("owner_id"), "nickname": user.get("nickname", key.get("target_nickname", "")),
+                              "role": user.get("role", key.get("role", "Стажер")), "mode": user.get("mode", key.get("mode", "")), "expires_at": user.get("expires_at", "")})
 
-async def get_key(code: str) -> dict | None:
-    return _find_key(await load_db(), code)[1]
-async def redeem_key(code: str, telegram_id: int) -> dict | None:
-    async with _LOCK:
-        db = await load_db(); stored_code, key = _find_key(db, code)
-        logging.info("[AUDIT] redeem_key found=%s stored_id=%s is_used=%s used_by=%s requester=%s",
-                     bool(key), stored_code or "-", key.get("is_used") if key else "-",
-                     key.get("used_by") if key else "-", telegram_id)
-        if not key: return None
-        if key.get("is_used"):
-            # Повторный вход разрешен только тому Telegram-пользователю,
-            # который уже активировал этот ключ ранее.
-            owner_match = key.get("used_by") == telegram_id
-            if not owner_match:
-                profile = db.get("users", {}).get(str(telegram_id), {})
-                entered = sanitize_input(code, 128)
-                owner_match = profile.get("key_code") in {entered, stored_code, key.get("key"), key.get("key_code")}
-                if owner_match:
-                    key["used_by"] = telegram_id
-                    await _write(db)
-            return dict(key) if owner_match else None
-        key["is_used"], key["used_by"] = 1, telegram_id; key["used_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S"); await _write(db); return dict(key)
-async def mark_key_used(code: str) -> None:
-    db = await load_db();
-    if code in db["keys"]: db["keys"][code]["is_used"] = 1; await save_db(db)
+async def moderation_event_api(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json(); code = db.sanitize_input(payload.get("code"), 128)
+        data = await db.load_db(); key = data.get("keys", {}).get(code) or next((v for v in data.get("keys", {}).values() if v.get("key") == code or v.get("key_code") == code), None)
+        owner_id = key.get("used_by") if key else None; user = data.get("users", {}).get(str(owner_id)) if owner_id else None
+        if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
+        await db.record_moderation_event(owner_id, payload.get("type", "punishment"), db.sanitize_input(payload.get("target"), 64), db.sanitize_input(payload.get("action"), 64), db.sanitize_input(payload.get("duration"), 32), db.sanitize_input(payload.get("reason"), 300))
+        return web.json_response({"ok": True})
+    except Exception:
+        return web.json_response({"ok": False}, status=400)
 
-async def reset_key_binding(code: str) -> bool:
-    """Сбрасывает владельца ключа и делает его снова доступным для активации."""
-    db = await load_db()
-    key = db["keys"].get(code)
-    if not key:
-        return False
-    key["is_used"] = 0
-    key.pop("used_by", None)
-    key.pop("used_at", None)
-    await save_db(db)
-    return True
-async def get_all_keys(limit=15, offset=0):
-    db = await load_db(); out=[]
-    for code, value in db["keys"].items(): item=dict(value); item["key_code"]=code; out.append(item)
-    return out[offset:offset+limit]
-async def find_key_by_prefix(prefix): return next((k for k in (await load_db())["keys"] if k.startswith(prefix)), None)
-async def delete_key(code): db=await load_db(); db["keys"].pop(code, None); await save_db(db)
-async def create_key(target_nickname, role, mode, days):
-    db=await load_db(); code=f"HF-{uuid.uuid4().hex[:12].upper()}"; db["keys"][code]={"key":code,"key_code":code,"target_nickname":sanitize_input(target_nickname,32),"role":role,"mode":mode,"days":max(1,int(days)),"is_used":0,"created_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S")}; await save_db(db); return code
-
-async def get_user(tg): return (await load_db())["users"].get(str(tg))
-async def get_all_users(limit=15, offset=0): return list((await load_db())["users"].values())[offset:offset+limit]
-async def create_user(telegram_id, username, nickname, role, mode, is_approved=0, days=0, key_code=""):
-    db=await load_db(); old=db["users"].get(str(telegram_id), {}); db["users"][str(telegram_id)]={**old,"telegram_id":telegram_id,"username":sanitize_input(username,64),"nickname":sanitize_input(nickname,32),"role":role,"mode":mode,"modes":old.get("modes", [mode]),"discord_id":old.get("discord_id",""),"discord_tag":old.get("discord_tag",""),"is_approved":int(is_approved),"is_banned":old.get("is_banned",0),"days":days,"key_code":key_code,"created_at":old.get("created_at",datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}; db["stats"].setdefault(str(telegram_id),{"user_id":telegram_id,"bans":0,"mutes":0,"checks":0}); await save_db(db)
-async def approve_user(tg):
-    db=await load_db(); user=db["users"].get(str(tg));
-    if user: user["is_approved"]=1; [a.update(status="approved") for a in db["applications"] if a.get("user_id")==tg and a.get("status")=="pending"]; await save_db(db)
-async def set_user_key(tg, code, days=None):
-    db=await load_db(); user=db["users"].get(str(tg));
-    if user: user["key_code"]=code; user["days"]=days if days is not None else user.get("days",0); user["activated_at"]=datetime.now().strftime("%Y-%m-%d %H:%M:%S"); await save_db(db)
-
-async def set_user_role(tg: int, role: str) -> bool:
-    db = await load_db(); user = db["users"].get(str(tg))
-    if not user or role not in ALL_ROLES:
-        return False
-    user["role"] = role
-    await save_db(db)
-    return True
-
-async def extend_user_key(tg: int, days: int) -> bool:
-    db = await load_db(); user = db["users"].get(str(tg))
-    if not user or not user.get("key_code"): return False
-    code, key = _find_key(db, user["key_code"])
-    if not key: return False
-    key["days"] = int(days); key["is_used"] = 1; key["is_active"] = 1; user["days"] = int(days)
-    await save_db(db); return True
-
-async def deactivate_user_key(tg: int) -> bool:
-    db = await load_db(); user = db["users"].get(str(tg));
-    if not user: return False
-    code, key = _find_key(db, user.get("key_code", ""))
-    if key: key["is_active"] = 0
-    user["is_approved"] = 0
-    await save_db(db); return True
-
-async def delete_user_account(tg: int, delete_key: bool) -> bool:
-    db = await load_db(); user = db["users"].pop(str(tg), None)
-    if not user: return False
-    if delete_key:
-        code, key = _find_key(db, user.get("key_code", ""))
-        if code: db["keys"].pop(code, None)
-    await save_db(db); return True
-
-async def get_moderation_logs(tg: int, kind: str = "all") -> list[dict]:
-    db = await load_db(); result = []
-    if kind in ("all", "punishments"): result.extend(db.get("punishment_logs", {}).get(str(tg), []))
-    if kind in ("all", "checks"): result.extend(db.get("check_logs", {}).get(str(tg), []))
-    return list(reversed(result))
-
-async def toggle_user_mode(tg: int, mode: str) -> tuple[bool, list[str]]:
-    db = await load_db(); user = db["users"].get(str(tg))
-    if not user or mode not in ALL_MODES: return False, []
-    modes = [item for item in user.get("modes", [user.get("mode", mode)]) if item in ALL_MODES]
-    if mode in modes:
-        if len(modes) == 1: return True, modes
-        modes.remove(mode)
-    else:
-        modes.append(mode)
-    user["modes"] = modes; user["mode"] = modes[0]
-    await save_db(db)
-    return True, modes
-async def update_discord(tg, tag): db=await load_db(); db["users"].get(str(tg), {}).update(discord_tag=sanitize_input(tag,50)); await save_db(db)
-async def get_user_stats(tg): return (await load_db())["stats"].get(str(tg),{"bans":0,"mutes":0,"checks":0})
-async def ban_user(tg):
+async def sessions_api(request: web.Request) -> web.Response:
+    data = await db.load_db(); code = db.sanitize_input(request.query.get("code"), 128); key, owner_id, user = await _irc_user(data, code)
     admin_ids = {int(item.strip()) for item in os.getenv("ADMIN_IDS", "").split(",") if item.strip().isdigit()}
-    if int(tg) in admin_ids: return False
-    db=await load_db(); db["users"].get(str(tg), {}).update(is_banned=1); await save_db(db); return True
-async def kick_user(tg): db=await load_db(); db["users"].pop(str(tg),None); await save_db(db)
+    if owner_id not in admin_ids: return web.json_response({"ok": False}, status=403)
+    now = datetime.now(timezone.utc); sessions = []
+    for item in data.get("users", {}).values():
+        try: active = (now - datetime.fromisoformat(item.get("client_last_seen", "")).replace(tzinfo=timezone.utc)).total_seconds() <= 45
+        except Exception: active = False
+        if active: sessions.append({"nickname": item.get("nickname", ""), "role": item.get("role", ""), "ip": item.get("client_ip", "-"), "server": item.get("client_server", "-")})
+    return web.json_response({"ok": True, "sessions": sessions})
 
-async def create_application(user_id, app_type, comment=""):
-    db=await load_db(); app_id=max([int(a.get("id",0)) for a in db["applications"]],default=0)+1; db["applications"].append({"id":app_id,"user_id":user_id,"type":app_type if app_type in ("entry_request","key_request") else "entry_request","comment":sanitize_input(comment,500),"status":"pending"}); await save_db(db); return app_id
-async def get_pending_applications(): return [a for a in (await load_db())["applications"] if a.get("status")=="pending"]
-async def update_app_status(app_id,status):
-    db=await load_db();
-    for a in db["applications"]:
-        if a.get("id")==app_id: a["status"]=status
-    await save_db(db)
-
-async def create_login_request(owner_id: int, code: str, ip: str, location: str) -> str:
-    db = await load_db()
-    request_id = uuid.uuid4().hex
-    db.setdefault("login_requests", {})[request_id] = {"id": request_id, "owner_id": owner_id, "key_code": code,
-        "ip": ip, "location": location, "status": "pending", "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-    await save_db(db)
-    return request_id
-
-async def get_login_request(request_id: str) -> dict | None:
-    return (await load_db()).get("login_requests", {}).get(request_id)
-
-async def update_login_request(request_id: str, status: str) -> bool:
-    db = await load_db(); item = db.get("login_requests", {}).get(request_id)
-    if not item: return False
-    item["status"] = status; item["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    await save_db(db); return True
-
-async def set_client_kicked(owner_id: int, kicked: bool) -> None:
-    db = await load_db(); user = db.get("users", {}).get(str(owner_id))
-    if user:
-        user["client_kicked"] = bool(kicked)
-        await save_db(db)
-
-async def update_user_setting(owner_id: int, name: str, value: bool) -> None:
-    db = await load_db(); user = db.get("users", {}).get(str(owner_id))
-    if user:
-        user.setdefault("settings", {})[name] = bool(value)
-        await save_db(db)
-
-async def record_moderation_event(owner_id: int, event_type: str, target: str, action: str, duration: str, reason: str) -> None:
-    db = await load_db(); user_id = str(owner_id)
-    bucket = "punishment_logs" if event_type == "punishment" else "check_logs"
-    db.setdefault(bucket, {}).setdefault(user_id, []).append({"target": target, "action": action, "duration": duration, "reason": reason, "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
-    stats = db["stats"].setdefault(user_id, {"user_id": owner_id, "bans": 0, "mutes": 0, "checks": 0})
-    if event_type == "punishment": stats["mutes" if action == "Мут" else "bans"] = stats.get("mutes" if action == "Мут" else "bans", 0) + 1
-    else: stats["checks"] = stats.get("checks", 0) + 1
-    await save_db(db)
-
-async def add_irc_message(owner_id: int, nickname: str, role: str, text: str, is_admin: bool = False, recipient_id: int | None = None) -> int:
-    db = await load_db(); messages = db.setdefault("irc_messages", [])
-    message_id = max([int(item.get("id", 0)) for item in messages], default=0) + 1
-    messages.append({"id": message_id, "owner_id": owner_id, "recipient_id": recipient_id, "nickname": nickname, "role": role, "is_admin": is_admin, "text": sanitize_input(text, 500), "created_at": datetime.now().strftime("%H:%M:%S")})
-    db["irc_messages"] = messages[-500:]; await save_db(db); return message_id
-
-async def get_irc_messages(after_id: int = 0, recipient_id: int | None = None) -> list[dict]:
-    return [item for item in (await load_db()).get("irc_messages", []) if int(item.get("id", 0)) > after_id and (item.get("recipient_id") is None or item.get("recipient_id") == recipient_id or item.get("owner_id") == recipient_id)]
-
-async def set_meme_effect(owner_id: int, scenario: str, target: str, started_at: int) -> None:
-    db = await load_db(); db.setdefault("meme_effects", {})[str(owner_id)] = {"owner_id": owner_id, "scenario": scenario, "target": target, "started_at": started_at, "updated_at": datetime.now().timestamp()}; await save_db(db)
-
-async def remove_meme_effect(owner_id: int) -> None:
-    db = await load_db(); db.setdefault("meme_effects", {}).pop(str(owner_id), None); await save_db(db)
-
-async def set_irc_mute(owner_id: int, target: str, duration: str, reason: str) -> None:
-    db = await load_db(); db.setdefault("irc_mutes", {})[target.casefold()] = {"target": target, "duration": duration, "reason": reason, "owner_id": owner_id, "created_at": datetime.now().timestamp()}; await save_db(db)
-
-async def is_irc_muted(target: str) -> bool:
-    item = (await load_db()).get("irc_mutes", {}).get(target.casefold())
-    if not item: return False
-    raw = item.get("duration", "0")
+async def meme_effect_api(request: web.Request) -> web.Response:
     try:
-        value, unit = int(raw[:-1]), raw[-1].lower(); seconds = value * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
-        if datetime.now().timestamp() - float(item.get("created_at", 0)) >= seconds:
-            return False
-    except (ValueError, KeyError):
-        return True
-    return True
-async def get_latest_mod():
-    mods=(await load_db())["mod_versions"]; return mods[-1] if mods else None
-async def get_all_mod_versions(): return list(reversed((await load_db())["mod_versions"]))
-async def save_mod_version(version_name,changelog,file_id,roles):
-    db=await load_db()
-    if any(m.get("version_name", "").casefold() == str(version_name).casefold() for m in db["mod_versions"]): return False
-    db["mod_versions"].append({"id":max([int(m.get("id",0)) for m in db["mod_versions"]],default=0)+1,"version_name":version_name,"changelog":changelog,"file_id":file_id,"allowed_roles":list(roles),"created_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S")}); await save_db(db); return True
-async def delete_mod_version(mod_id): db=await load_db(); db["mod_versions"]=[m for m in db["mod_versions"] if m.get("id")!=mod_id]; await save_db(db)
-async def export_table_to_txt(table_name):
-    filename = str(DB_PATH.parent / f"{sanitize_input(table_name,32)}.txt")
-    data = (await load_db()).get(table_name, {})
-    async with aiofiles.open(filename, "w", encoding="utf-8") as f:
-        await f.write(json.dumps(data, ensure_ascii=False, indent=2))
-    return filename
+        payload = await request.json(); data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
+        if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
+        if payload.get("active", True): await db.set_meme_effect(owner_id, db.sanitize_input(payload.get("scenario"), 32), db.sanitize_input(payload.get("target"), 64), int(payload.get("started_at", 0)))
+        else: await db.remove_meme_effect(owner_id)
+        return web.json_response({"ok": True})
+    except Exception: return web.json_response({"ok": False}, status=400)
+
+async def meme_effects_api(request: web.Request) -> web.Response:
+    try:
+        data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(request.query.get("code"), 128))
+        if not key or not user or not user.get("is_approved"): return web.json_response({"ok": False}, status=403)
+        effects = [item for item in data.get("meme_effects", {}).values() if item.get("owner_id") != owner_id and datetime.now().timestamp() - float(item.get("updated_at", 0)) < 10]
+        return web.json_response({"ok": True, "effects": effects})
+    except Exception: return web.json_response({"ok": False}, status=400)
+
+async def _irc_user(data: dict, code: str):
+    key = data.get("keys", {}).get(code) or next((v for v in data.get("keys", {}).values() if v.get("key") == code or v.get("key_code") == code), None)
+    owner_id = key.get("used_by") if key else None; user = data.get("users", {}).get(str(owner_id)) if owner_id else None
+    return key, owner_id, user
+
+async def irc_send_api(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json(); data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
+        if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
+        if await db.is_irc_muted(user.get("nickname", "")): return web.json_response({"ok": False, "error": "IRC-мут активен."}, status=403)
+        admin_ids = [int(item.strip()) for item in os.getenv("ADMIN_IDS", "").split(",") if item.strip().isdigit()]
+        target = db.sanitize_input(payload.get("target"), 64).lstrip("@")
+        recipient_id = None
+        if target:
+            target_user = next((item for item in data.get("users", {}).values() if item.get("username", "").casefold() == target.casefold() or item.get("nickname", "").casefold() == target.casefold()), None)
+            if not target_user: return web.json_response({"ok": False, "error": "Пользователь не найден."}, status=404)
+            recipient_id = target_user.get("telegram_id")
+        message_id = await db.add_irc_message(owner_id, user.get("nickname", ""), user.get("role", ""), payload.get("text", ""), owner_id in admin_ids, recipient_id)
+        return web.json_response({"ok": True, "id": message_id})
+    except Exception: return web.json_response({"ok": False}, status=400)
+
+async def irc_mute_api(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json(); data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
+        if not key or not user or not user.get("is_approved"): return web.json_response({"ok": False}, status=403)
+        admin_ids = {int(item.strip()) for item in os.getenv("ADMIN_IDS", "").split(",") if item.strip().isdigit()}
+        if int(owner_id) not in admin_ids:
+            return web.json_response({"ok": False, "error": "Только администратор может выдавать IRC-мут."}, status=403)
+        target = db.sanitize_input(payload.get("target"), 64).lstrip("@")
+        duration = db.sanitize_input(payload.get("duration"), 16)
+        reason = db.sanitize_input(payload.get("reason"), 300) or "Без причины"
+        target_user = next((item for item in data.get("users", {}).values()
+                            if item.get("username", "").casefold() == target.casefold()
+                            or item.get("nickname", "").casefold() == target.casefold()), None)
+        if not target_user:
+            return web.json_response({"ok": False, "error": "Пользователь не найден."}, status=404)
+        await db.set_irc_mute(owner_id, target, duration, reason)
+        target_id = int(target_user.get("telegram_id"))
+        issuer = db.sanitize_input(user.get("nickname") or user.get("username") or "администратор", 64)
+        await db.add_irc_message(0, "Система", "IRC", f"Вас замутил {issuer} в IRC на {duration}. Причина: {reason}", False, target_id)
+        return web.json_response({"ok": True})
+    except Exception: return web.json_response({"ok": False}, status=400)
+
+async def irc_poll_api(request: web.Request) -> web.Response:
+    try:
+        data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(request.query.get("code"), 128))
+        if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
+        return web.json_response({"ok": True, "messages": await db.get_irc_messages(int(request.query.get("after", "0")), owner_id)})
+    except Exception: return web.json_response({"ok": False}, status=400)
+
+async def start_api() -> web.AppRunner:
+    app = web.Application()
+    app.router.add_post("/api/v1/activate", activate_api)
+    app.router.add_post("/api/v1/heartbeat", heartbeat_api)
+    app.router.add_get("/api/v1/login-status/{request_id}", login_status_api)
+    app.router.add_post("/api/v1/event", moderation_event_api)
+    app.router.add_get("/api/v1/sessions", sessions_api)
+    app.router.add_post("/api/v1/meme/effect", meme_effect_api)
+    app.router.add_get("/api/v1/meme/effects", meme_effects_api)
+    app.router.add_post("/api/v1/irc/send", irc_send_api)
+    app.router.add_post("/api/v1/irc/mute", irc_mute_api)
+    app.router.add_get("/api/v1/irc/poll", irc_poll_api)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    try:
+        await web.TCPSite(runner, API_HOST, API_PORT).start()
+    except OSError as exc:
+        await runner.cleanup()
+        logging.error("Не удалось открыть API-порт %s: %s", API_PORT, exc)
+        return None
+    logging.info("HF API listening on %s:%s", API_HOST, API_PORT)
+    return runner
+
+async def main():
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN не установлен в .env файле!")
+
+    # Инициализация JSON БД
+    await db.init_db()
+    logging.info("[AUDIT] database path=%s", db.DB_PATH)
+
+    # Фоновая автопроверка БД раз в 10 секунд
+    asyncio.create_task(db.auto_reload_db_task(interval=10))
+
+    bot = Bot(token=BOT_TOKEN)
+    global bot_instance
+    bot_instance = bot
+    api_runner = await start_api()
+    dp = Dispatcher(storage=MemoryStorage())
+
+    # 🛡️ ПОДКЛЮЧЕНИЕ АНТИСПАМ ЗАЩИТЫ (0.7 сек задержка)
+    dp.message.outer_middleware(AntiSpamMiddleware(limit=0.7))
+    dp.callback_query.outer_middleware(AntiSpamMiddleware(limit=0.7))
+
+    # Подключение роутеров
+    dp.include_router(auth.router)
+    dp.include_router(profile.router)
+    dp.include_router(mod.router)
+    dp.include_router(admin.router)
+
+    logging.info("🚀 Бот запущен со встроенной системой защиты от спама!")
+    try:
+        await dp.start_polling(bot)
+    finally:
+        if api_runner is not None:
+            await api_runner.cleanup()
+        await bot.session.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
