@@ -271,10 +271,10 @@ async def record_moderation_event(owner_id: int, event_type: str, target: str, a
     else: stats["checks"] = stats.get("checks", 0) + 1
     await save_db(db)
 
-async def add_irc_message(owner_id: int, nickname: str, role: str, text: str, is_admin: bool = False, recipient_id: int | None = None) -> int:
+async def add_irc_message(owner_id: int, nickname: str, role: str, text: str, is_admin: bool = False, recipient_id: int | None = None, title: str = "") -> int:
     db = await load_db(); messages = db.setdefault("irc_messages", [])
     message_id = max([int(item.get("id", 0)) for item in messages], default=0) + 1
-    messages.append({"id": message_id, "owner_id": owner_id, "recipient_id": recipient_id, "nickname": nickname, "role": role, "is_admin": is_admin, "text": sanitize_input(text, 500), "created_at": datetime.now().strftime("%H:%M:%S")})
+    messages.append({"id": message_id, "owner_id": owner_id, "recipient_id": recipient_id, "nickname": nickname, "role": role, "is_admin": is_admin, "title": sanitize_input(title, 80), "text": sanitize_input(text, 500), "created_at": datetime.now().strftime("%H:%M:%S")})
     db["irc_messages"] = messages[-500:]; await save_db(db); return message_id
 
 async def get_irc_messages(after_id: int = 0, recipient_id: int | None = None) -> list[dict]:
@@ -300,6 +300,27 @@ async def is_irc_muted(target: str) -> bool:
     except (ValueError, KeyError):
         return True
     return True
+
+IRC_TITLES = [
+"&#FFD4D4A&#FFB6B6n&#FF9898y&#FF7B7BD&#FF5D5De&#FF3F3Fs&#FF2121k",
+"&#5CB0FFᴘ&#50A5FFу&#449AFFч&#398EFFн&#2D83FFи&#2178FFᴋ",
+"&#BB5CFF/&#CC4DF2s&#DD3FE6p&#EE30D9e&#FF21CCc",
+"&#5CFF74ф&#5AFF6Cр&#58FF63и &#54FF53м&#52FF4Bо&#50FF42д&#4EFF3Aе&#4CFF32р&#4AFF29к&#48FF21а",
+"&#FF5CC6ч&#FF4DBAи&#FF3FAEт&#FF30A2а&#FF2196к",
+"&#FF0000/&#EF0000b&#E00000a&#D00000n &#B00000a&#A10000l&#910000l",
+"&#FF8600ᴄ&#FF8E0Dʜ&#FF971Aᴇ&#FF9F27ᴀ&#FFA734ᴛ &#FFB84Eʜ&#FFC05Bᴜ&#FFC868ɴ&#FFD075ᴇ&#FFD982ʀ",
+"&#FFFFFFд&#E5E5E5ᴘ&#CACACAу&#B0B0B0н",
+"&#FF74CEш&#FD70B3и&#FC6D98п&#FA697Eу&#F86563ч&#F76248ᴋ&#F55E2Dᴀ",
+"&#5CF2FFᴛ&#55E6FEɪ&#4FD9FCᴇ&#48CDFBʀ &#3AB5F8- &#2D9CF51",
+"&#FF5C5Cп&#F67654ᴀ&#ED8F4Cн&#E5A945т&#DCC23Dᴇ&#D3DC35ᴘ&#CAF52Dᴀ",
+"&#FFF45Cп&#EAE56Bо&#D5D57Bт&#C0C68Aу&#ABB799ж&#96A8A9н&#8198B8о &#577AD6л&#426AE6ᴇ&#2D5BF5т"
+]
+async def set_irc_title(user_id: int, title: str) -> bool:
+    db = await load_db(); user = db.get("users", {}).get(str(user_id))
+    if not user or title not in IRC_TITLES: return False
+    user["irc_title"] = title; await save_db(db); return True
+async def clear_irc_title(user_id: int) -> None:
+    db = await load_db(); user = db.get("users", {}).get(str(user_id), {}); user.pop("irc_title", None); await save_db(db)
 async def get_latest_mod():
     mods=(await load_db())["mod_versions"]; return mods[-1] if mods else None
 async def get_all_mod_versions(): return list(reversed((await load_db())["mod_versions"]))
