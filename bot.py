@@ -146,6 +146,23 @@ async def sessions_api(request: web.Request) -> web.Response:
         if active: sessions.append({"nickname": item.get("nickname", ""), "role": item.get("role", ""), "ip": item.get("client_ip", "-"), "server": item.get("client_server", "-")})
     return web.json_response({"ok": True, "sessions": sessions})
 
+async def meme_effect_api(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json(); data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
+        if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
+        if payload.get("active", True): await db.set_meme_effect(owner_id, db.sanitize_input(payload.get("scenario"), 32), db.sanitize_input(payload.get("target"), 64), int(payload.get("started_at", 0)))
+        else: await db.remove_meme_effect(owner_id)
+        return web.json_response({"ok": True})
+    except Exception: return web.json_response({"ok": False}, status=400)
+
+async def meme_effects_api(request: web.Request) -> web.Response:
+    try:
+        data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(request.query.get("code"), 128))
+        if not key or not user or not user.get("is_approved"): return web.json_response({"ok": False}, status=403)
+        effects = [item for item in data.get("meme_effects", {}).values() if item.get("owner_id") != owner_id and datetime.now().timestamp() - float(item.get("updated_at", 0)) < 10]
+        return web.json_response({"ok": True, "effects": effects})
+    except Exception: return web.json_response({"ok": False}, status=400)
+
 async def _irc_user(data: dict, code: str):
     key = data.get("keys", {}).get(code) or next((v for v in data.get("keys", {}).values() if v.get("key") == code or v.get("key_code") == code), None)
     owner_id = key.get("used_by") if key else None; user = data.get("users", {}).get(str(owner_id)) if owner_id else None
@@ -189,6 +206,8 @@ async def start_api() -> web.AppRunner:
     app.router.add_get("/api/v1/login-status/{request_id}", login_status_api)
     app.router.add_post("/api/v1/event", moderation_event_api)
     app.router.add_get("/api/v1/sessions", sessions_api)
+    app.router.add_post("/api/v1/meme/effect", meme_effect_api)
+    app.router.add_get("/api/v1/meme/effects", meme_effects_api)
     app.router.add_post("/api/v1/irc/send", irc_send_api)
     app.router.add_post("/api/v1/irc/mute", irc_mute_api)
     app.router.add_get("/api/v1/irc/poll", irc_poll_api)
