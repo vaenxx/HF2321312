@@ -23,6 +23,7 @@ def get_admin_ids() -> list[int]:
 
 class KeyGenStates(StatesGroup):
     waiting_for_nick = State()
+    waiting_for_role = State()
     waiting_for_days = State()
 
 class ModUploadStates(StatesGroup):
@@ -33,6 +34,7 @@ class ModUploadStates(StatesGroup):
 
 class BroadcastStates(StatesGroup):
     waiting_for_message = State()
+    waiting_for_destination = State()
     waiting_for_confirmation = State()
 
 def get_admin_main_reply_kb() -> ReplyKeyboardMarkup:
@@ -492,7 +494,23 @@ async def gen_key_start(message: Message, state: FSMContext):
 async def gen_key_nick(message: Message, state: FSMContext):
     nick = db.sanitize_input(message.text, max_length=32)
     await state.update_data(nick=nick)
-    await message.answer("⏳ Укажите срок действия ключа в днях (число):", parse_mode="HTML", reply_markup=get_cancel_reply_kb())
+    rows = [[InlineKeyboardButton(text=role, callback_data=f"keygen_role_{index}")] for index, role in enumerate(db.ALL_ROLES)]
+    await message.answer("🎭 <b>Выберите ранг, который будет сразу записан в ключ:</b>", parse_mode="HTML",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await state.set_state(KeyGenStates.waiting_for_role)
+
+@router.callback_query(F.data.startswith("keygen_role_"), KeyGenStates.waiting_for_role)
+async def gen_key_role(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in get_admin_ids():
+        return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    try:
+        role = db.ALL_ROLES[int(callback.data.removeprefix("keygen_role_"))]
+    except (ValueError, IndexError):
+        return await callback.answer("Некорректный ранг.", show_alert=True)
+    await state.update_data(role=role)
+    await callback.answer()
+    await callback.message.edit_text(
+        f"🎭 Ранг ключа: <b>{role}</b>\n\n⏳ Укажите срок действия ключа в днях (число):", parse_mode="HTML")
     await state.set_state(KeyGenStates.waiting_for_days)
 
 @router.message(KeyGenStates.waiting_for_days)
@@ -502,11 +520,11 @@ async def gen_key_days(message: Message, state: FSMContext):
         return
     
     data = await state.get_data()
-    key_code = await db.create_key(target_nickname=data["nick"], role="Стажер", mode="HolyWorld", days=int(message.text))
+    key_code = await db.create_key(target_nickname=data["nick"], role=data.get("role", "HW: Стажер"), mode="HolyWorld", days=int(message.text))
     await state.clear()
     
     await message.answer(
-        f"🎉 <b>Секретный ключ создан!</b>\n\n🔑 <b>Ключ:</b>\n<code>{key_code}</code>\n\n👤 <b>Для:</b> <code>{data['nick']}</code>\n⏳ <b>Срок:</b> {message.text} дней",
+        f"🎉 <b>Секретный ключ создан!</b>\n\n🔑 <b>Ключ:</b>\n<code>{key_code}</code>\n\n👤 <b>Для:</b> <code>{data['nick']}</code>\n🎭 <b>Ранг:</b> {data.get('role', 'HW: Стажер')}\n⏳ <b>Срок:</b> {message.text} дней",
         parse_mode="HTML",
         reply_markup=get_admin_main_reply_kb()
     )
@@ -651,11 +669,31 @@ async def broadcast_send(message: Message, state: FSMContext, bot):
     if not await check_admin_access(message): return
     await state.update_data(source_chat=message.chat.id, source_message=message.message_id,
                             irc_text=(message.text or message.caption or "").strip())
-    await message.answer("⚠️ <b>Проверьте глобальное сообщение</b>\nОно будет отправлено всем одобренным модераторам.", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Изменить", callback_data="broadcast_edit"), InlineKeyboardButton(text="✅ Сохранить", callback_data="broadcast_confirm")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel")]
-    ]))
     await bot.copy_message(chat_id=message.chat.id, from_chat_id=message.chat.id, message_id=message.message_id)
+    await message.answer("📍 <b>Куда отправить это сообщение?</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 Только Telegram", callback_data="broadcast_dest_tg")],
+        [InlineKeyboardButton(text="🎮 Только Minecraft", callback_data="broadcast_dest_mc")],
+        [InlineKeyboardButton(text="📱 + 🎮 Telegram и Minecraft", callback_data="broadcast_dest_both")],
+        [InlineKeyboardButton(text="✏️ Изменить", callback_data="broadcast_edit"), InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel")]
+    ]))
+    await state.set_state(BroadcastStates.waiting_for_destination)
+
+@router.callback_query(F.data.startswith("broadcast_dest_"), BroadcastStates.waiting_for_destination)
+async def broadcast_destination(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in get_admin_ids():
+        return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    destination = callback.data.removeprefix("broadcast_dest_")
+    labels = {"tg": "только Telegram", "mc": "только Minecraft", "both": "Telegram и Minecraft"}
+    if destination not in labels:
+        return await callback.answer("Некорректный канал.", show_alert=True)
+    await state.update_data(destination=destination)
+    await callback.answer()
+    await callback.message.edit_text(
+        f"⚠️ <b>Проверьте глобальное сообщение</b>\nКанал: <b>{labels[destination]}</b>\n\nПодтвердить отправку?",
+        parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✏️ Изменить", callback_data="broadcast_edit"), InlineKeyboardButton(text="✅ Сохранить", callback_data="broadcast_confirm")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel")]
+        ]))
     await state.set_state(BroadcastStates.waiting_for_confirmation)
 
 async def _send_broadcast(state: FSMContext, bot) -> int:
@@ -673,17 +711,22 @@ async def _send_broadcast(state: FSMContext, bot) -> int:
 async def broadcast_confirm(callback: CallbackQuery, state: FSMContext, bot):
     data = await state.get_data()
     irc_text = data.get("irc_text", "")
-    if irc_text:
+    destination = data.get("destination", "tg")
+    if destination in {"mc", "both"} and irc_text:
         announcement_title = "&7[&#FF3F3FО&#F53838Б&#EB3131Ъ&#E22A2AЯ&#D82323В&#CE1C1CЛ&#C41515Е&#BB0E0EН&#B10707И&#A70000Е&7]"
         await db.add_irc_message(0, "", "", irc_text, True, None, announcement_title, True)
-    sent = await _send_broadcast(state, bot); await state.clear(); await callback.answer("Рассылка отправлена", show_alert=True)
-    await callback.message.edit_text(f"✅ <b>Глобальное сообщение отправлено.</b> Получателей: {sent}", parse_mode="HTML")
+    sent = await _send_broadcast(state, bot) if destination in {"tg", "both"} else 0
+    await state.clear(); await callback.answer("Рассылка отправлена", show_alert=True)
+    channels = {"tg": "Telegram", "mc": "Minecraft", "both": "Telegram и Minecraft"}
+    await callback.message.edit_text(f"✅ <b>Глобальное сообщение отправлено.</b>\nКанал: {channels.get(destination, 'Telegram')}\nПолучателей в Telegram: {sent}", parse_mode="HTML")
 
 @router.callback_query(F.data == "broadcast_edit", BroadcastStates.waiting_for_confirmation)
+@router.callback_query(F.data == "broadcast_edit", BroadcastStates.waiting_for_destination)
 async def broadcast_edit(callback: CallbackQuery, state: FSMContext):
     await state.set_state(BroadcastStates.waiting_for_message); await callback.answer("Отправьте исправленный текст или файл")
     await callback.message.edit_text("✏️ Отправьте новое сообщение для предпросмотра.", parse_mode="HTML")
 
 @router.callback_query(F.data == "broadcast_cancel", BroadcastStates.waiting_for_confirmation)
+@router.callback_query(F.data == "broadcast_cancel", BroadcastStates.waiting_for_destination)
 async def broadcast_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear(); await callback.answer("Рассылка отменена", show_alert=True); await callback.message.edit_text("❌ Рассылка отменена.", parse_mode="HTML")
