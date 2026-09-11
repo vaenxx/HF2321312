@@ -3,6 +3,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 import aiofiles
+from dotenv import load_dotenv
+
+# Load hosting/local variables before resolving the persistent database path.
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 _DATA_DIR = os.getenv("DATA_DIR", "").strip()
 DB_PATH = (Path(_DATA_DIR) / "database.json") if _DATA_DIR else (Path(__file__).resolve().parent / "database.json")
@@ -71,12 +75,20 @@ async def init_db() -> None:
         else:
             await save_db(_default())
             return
+    # A deployment can copy a fresh template database over the persistent file.
+    # If that template is empty, prefer the previous atomic-write backup.
+    backup = DB_PATH.with_suffix(".json.bak")
     try:
         async with aiofiles.open(DB_PATH, "r", encoding="utf-8") as file:
             content = await file.read()
         data = _normalize(json.loads(content) if content.strip() else None)
+        if not data.get("users") and not data.get("keys") and backup.exists():
+            async with aiofiles.open(backup, "r", encoding="utf-8") as file:
+                previous = _normalize(json.loads(await file.read()))
+            if previous.get("users") or previous.get("keys"):
+                shutil.copy2(backup, DB_PATH)
+                data = previous
     except (OSError, json.JSONDecodeError):
-        backup = DB_PATH.with_suffix(".json.bak")
         if backup.exists():
             shutil.copy2(backup, DB_PATH)
             return
