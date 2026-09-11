@@ -649,7 +649,8 @@ async def broadcast_start(message: Message, state: FSMContext):
 @router.message(BroadcastStates.waiting_for_message)
 async def broadcast_send(message: Message, state: FSMContext, bot):
     if not await check_admin_access(message): return
-    await state.update_data(source_chat=message.chat.id, source_message=message.message_id)
+    await state.update_data(source_chat=message.chat.id, source_message=message.message_id,
+                            irc_text=(message.text or message.caption or "").strip())
     await message.answer("⚠️ <b>Проверьте глобальное сообщение</b>\nОно будет отправлено всем одобренным модераторам.", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Изменить", callback_data="broadcast_edit"), InlineKeyboardButton(text="✅ Сохранить", callback_data="broadcast_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel")]
@@ -670,6 +671,11 @@ async def _send_broadcast(state: FSMContext, bot) -> int:
 
 @router.callback_query(F.data == "broadcast_confirm", BroadcastStates.waiting_for_confirmation)
 async def broadcast_confirm(callback: CallbackQuery, state: FSMContext, bot):
+    data = await state.get_data()
+    irc_text = data.get("irc_text", "")
+    if irc_text:
+        announcement_title = "&7[&#FF3F3FО&#F53838Б&#EB3131Ъ&#E22A2AЯ&#D82323В&#CE1C1CЛ&#C41515Е&#BB0E0EН&#B10707И&#A70000Е&7]"
+        await db.add_irc_message(0, "", "", irc_text, True, None, announcement_title, True)
     sent = await _send_broadcast(state, bot); await state.clear(); await callback.answer("Рассылка отправлена", show_alert=True)
     await callback.message.edit_text(f"✅ <b>Глобальное сообщение отправлено.</b> Получателей: {sent}", parse_mode="HTML")
 
