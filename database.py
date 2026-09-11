@@ -6,6 +6,7 @@ import aiofiles
 
 _DATA_DIR = os.getenv("DATA_DIR", "").strip()
 DB_PATH = (Path(_DATA_DIR) / "database.json") if _DATA_DIR else (Path(__file__).resolve().parent / "database.json")
+SOURCE_DB_PATH = Path(__file__).resolve().parent / "database.json"
 _LOCK = asyncio.Lock()
 ADMIN_ROLES = []
 ALL_ROLES = ["HW: Стажер", "HW: Мл. Сотрудник", "HW: Сотрудник", "HW: Мл.Спектатор", "HW: Спектатор", "HW: Ст.Сотрудник",
@@ -58,7 +59,30 @@ async def _write(data: dict) -> None:
 
 async def save_db(data: dict) -> None:
     async with _LOCK: await _write(data)
-async def init_db() -> None: await save_db(await load_db())
+async def init_db() -> None:
+    """Initialize persistent storage without destroying an existing database."""
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not DB_PATH.exists():
+        backup = DB_PATH.with_suffix(".json.bak")
+        if backup.exists():
+            shutil.copy2(backup, DB_PATH)
+        elif SOURCE_DB_PATH.exists() and SOURCE_DB_PATH.resolve() != DB_PATH.resolve():
+            shutil.copy2(SOURCE_DB_PATH, DB_PATH)
+        else:
+            await save_db(_default())
+            return
+    try:
+        async with aiofiles.open(DB_PATH, "r", encoding="utf-8") as file:
+            content = await file.read()
+        data = _normalize(json.loads(content) if content.strip() else None)
+    except (OSError, json.JSONDecodeError):
+        backup = DB_PATH.with_suffix(".json.bak")
+        if backup.exists():
+            shutil.copy2(backup, DB_PATH)
+            return
+        raise RuntimeError(f"База данных повреждена: {DB_PATH}")
+    # Normalize old records in place, preserving all user/key/event data.
+    await save_db(data)
 async def auto_reload_db_task(interval: int = 10) -> None:
     while True:
         await asyncio.sleep(interval)
