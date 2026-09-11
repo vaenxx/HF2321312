@@ -143,7 +143,9 @@ async def sessions_api(request: web.Request) -> web.Response:
     for item in data.get("users", {}).values():
         try: active = (now - datetime.fromisoformat(item.get("client_last_seen", "")).replace(tzinfo=timezone.utc)).total_seconds() <= 45
         except Exception: active = False
-        if active: sessions.append({"nickname": item.get("nickname", ""), "role": item.get("role", ""), "ip": item.get("client_ip", "-"), "server": item.get("client_server", "-")})
+        if active:
+            admin_ids = {int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
+            sessions.append({"nickname": item.get("nickname", ""), "role": item.get("role", ""), "title": item.get("irc_title", ""), "is_admin": int(item.get("telegram_id", 0)) in admin_ids, "ip": item.get("client_ip", "-"), "server": item.get("client_server", "-")})
     return web.json_response({"ok": True, "sessions": sessions})
 
 async def meme_effect_api(request: web.Request) -> web.Response:
@@ -179,7 +181,13 @@ async def irc_send_api(request: web.Request) -> web.Response:
             target_user = next((item for item in data.get("users", {}).values() if item.get("username", "").casefold() == target.casefold() or item.get("nickname", "").casefold() == target.casefold()), None)
             if not target_user: return web.json_response({"ok": False, "error": "Пользователь не найден."}, status=404)
             recipient_id = target_user.get("telegram_id")
-        message_id = await db.add_irc_message(owner_id, user.get("nickname", ""), user.get("role", ""), payload.get("text", ""), owner_id in admin_ids, recipient_id, user.get("irc_title", ""))
+        title = db.sanitize_input(payload.get("title"), 500)
+        if title and title in db.IRC_TITLES:
+            user["irc_title"] = title
+            await db.save_db(data)
+        else:
+            title = user.get("irc_title", "")
+        message_id = await db.add_irc_message(owner_id, user.get("nickname", ""), user.get("role", ""), payload.get("text", ""), owner_id in admin_ids, recipient_id, title)
         return web.json_response({"ok": True, "id": message_id})
     except Exception: return web.json_response({"ok": False}, status=400)
 
