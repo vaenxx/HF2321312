@@ -172,7 +172,6 @@ async def irc_send_api(request: web.Request) -> web.Response:
     try:
         payload = await request.json(); data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
         if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
-        if await db.is_irc_muted(user.get("nickname", "")): return web.json_response({"ok": False, "error": "IRC-мут активен."}, status=403)
         admin_ids = [int(item.strip()) for item in os.getenv("ADMIN_IDS", "").split(",") if item.strip().isdigit()]
         target = db.sanitize_input(payload.get("target"), 64).lstrip("@")
         recipient_id = None
@@ -180,7 +179,7 @@ async def irc_send_api(request: web.Request) -> web.Response:
             target_user = next((item for item in data.get("users", {}).values() if item.get("username", "").casefold() == target.casefold() or item.get("nickname", "").casefold() == target.casefold()), None)
             if not target_user: return web.json_response({"ok": False, "error": "Пользователь не найден."}, status=404)
             recipient_id = target_user.get("telegram_id")
-        message_id = await db.add_irc_message(owner_id, user.get("nickname", ""), user.get("role", ""), payload.get("text", ""), owner_id in admin_ids, recipient_id)
+        message_id = await db.add_irc_message(owner_id, user.get("nickname", ""), user.get("role", ""), payload.get("text", ""), owner_id in admin_ids, recipient_id, user.get("irc_title", ""))
         return web.json_response({"ok": True, "id": message_id})
     except Exception: return web.json_response({"ok": False}, status=400)
 
@@ -213,6 +212,20 @@ async def irc_poll_api(request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "messages": await db.get_irc_messages(int(request.query.get("after", "0")), owner_id)})
     except Exception: return web.json_response({"ok": False}, status=400)
 
+async def irc_titles_api(request: web.Request) -> web.Response:
+    try:
+        data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(request.query.get("code"), 128))
+        if not key or not user or not user.get("is_approved"):
+            return web.json_response({"ok": False}, status=403)
+        if request.method == "GET":
+            return web.json_response({"ok": True, "titles": db.IRC_TITLES, "selected": user.get("irc_title", "")})
+        payload = await request.json(); title = db.sanitize_input(payload.get("title"), 500)
+        if title.casefold() == "off":
+            await db.clear_irc_title(owner_id); return web.json_response({"ok": True})
+        if await db.set_irc_title(owner_id, title): return web.json_response({"ok": True, "title": title})
+        return web.json_response({"ok": False, "error": "Титул не найден."}, status=400)
+    except Exception: return web.json_response({"ok": False}, status=400)
+
 async def start_api() -> web.AppRunner:
     app = web.Application()
     app.router.add_post("/api/v1/activate", activate_api)
@@ -225,6 +238,8 @@ async def start_api() -> web.AppRunner:
     app.router.add_post("/api/v1/irc/send", irc_send_api)
     app.router.add_post("/api/v1/irc/mute", irc_mute_api)
     app.router.add_get("/api/v1/irc/poll", irc_poll_api)
+    app.router.add_get("/api/v1/irc/titles", irc_titles_api)
+    app.router.add_post("/api/v1/irc/titles", irc_titles_api)
     runner = web.AppRunner(app)
     await runner.setup()
     try:
