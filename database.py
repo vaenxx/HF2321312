@@ -244,6 +244,12 @@ async def add_irc_message(owner_id: int, nickname: str, role: str, text: str, is
 async def get_irc_messages(after_id: int = 0, recipient_id: int | None = None) -> list[dict]:
     return [item for item in (await load_db()).get("irc_messages", []) if int(item.get("id", 0)) > after_id and (item.get("recipient_id") is None or item.get("recipient_id") == recipient_id or item.get("owner_id") == recipient_id)]
 
+async def set_meme_effect(owner_id: int, scenario: str, target: str, started_at: int) -> None:
+    db = await load_db(); db.setdefault("meme_effects", {})[str(owner_id)] = {"owner_id": owner_id, "scenario": scenario, "target": target, "started_at": started_at, "updated_at": datetime.now().timestamp()}; await save_db(db)
+
+async def remove_meme_effect(owner_id: int) -> None:
+    db = await load_db(); db.setdefault("meme_effects", {}).pop(str(owner_id), None); await save_db(db)
+
 async def set_irc_mute(owner_id: int, target: str, duration: str, reason: str) -> None:
     db = await load_db(); db.setdefault("irc_mutes", {})[target.casefold()] = {"target": target, "duration": duration, "reason": reason, "owner_id": owner_id, "created_at": datetime.now().timestamp()}; await save_db(db)
 
