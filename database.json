@@ -13,13 +13,13 @@
       "created_at": "2026-01-01 00:00:00",
       "key_code": "HF-246B09FF2BAAB6AA921F394A227A63893EC4",
       "days": 30,
-      "client_last_seen": "2026-09-11T09:20:01.477750+00:00",
+      "client_last_seen": "2026-09-11T10:41:23.960901+00:00",
       "modes": [
         "HolyWorld"
       ],
       "client_kicked": false,
       "client_ip": "94.156.131.235",
-      "client_server": ""
+      "client_server": "svz.holyfake.su"
     },
     "1299148508": {
       "telegram_id": 1299148508,
@@ -38,7 +38,7 @@
       "key_code": "HF-EAF79FA26C04",
       "created_at": "2026-09-11 07:51:10",
       "client_kicked": false,
-      "client_last_seen": "2026-09-11T09:47:56.151542+00:00",
+      "client_last_seen": "2026-09-11T10:45:16.171851+00:00",
       "client_ip": "94.156.131.235",
       "client_server": "svz.holyfake.su"
     },
@@ -80,7 +80,7 @@
       "key_code": "HF-FF95DE9C7C86",
       "created_at": "2026-09-11 08:07:57",
       "client_kicked": false,
-      "client_last_seen": "2026-09-11T09:48:03.061776+00:00",
+      "client_last_seen": "2026-09-11T10:45:23.167162+00:00",
       "client_ip": "94.156.131.235",
       "client_server": ""
     },
@@ -174,6 +174,16 @@
       "created_at": "2026-09-11 08:23:46",
       "used_by": 8205450482,
       "used_at": "2026-09-11 08:24:40"
+    },
+    "HF-322FB1D9861A": {
+      "key": "HF-322FB1D9861A",
+      "key_code": "HF-322FB1D9861A",
+      "target_nickname": "burbenalix",
+      "role": "Стажер",
+      "mode": "HolyWorld",
+      "days": 14,
+      "is_used": 0,
+      "created_at": "2026-09-11 10:24:37"
     }
   },
   "applications": [
