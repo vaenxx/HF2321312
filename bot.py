@@ -261,7 +261,13 @@ async def main():
     dp.include_router(auth.router)
     dp.include_router(profile.router)
     dp.include_router(mod.router)
-    dp.include_router(admin.router)
+    # Keep startup compatible with older deployments that called this router
+    # ``admin_router`` while the current handler module exposes ``router``.
+    admin_router = getattr(admin, "router", None) or getattr(admin, "admin_router", None)
+    if admin_router is None:
+        logging.error("Модуль handlers.admin загружен без Router; админ-панель отключена")
+    else:
+        dp.include_router(admin_router)
 
     logging.info("🚀 Бот запущен со встроенной системой защиты от спама!")
     try:
