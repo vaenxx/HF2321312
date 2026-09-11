@@ -1,681 +1,316 @@
-import os
-from datetime import datetime, timezone
+import asyncio, json, os, tempfile, uuid, logging, shutil
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+import aiofiles
 from dotenv import load_dotenv
-from aiogram import Router, F
-from aiogram.types import (
-    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, 
-    ReplyKeyboardMarkup, KeyboardButton, FSInputFile, ReplyKeyboardRemove
-)
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import StatesGroup, State
-import database as db
 
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+# Load hosting/local variables before resolving the persistent database path.
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
-router = Router()
+_DATA_DIR = os.getenv("DATA_DIR", "").strip()
+DB_PATH = (Path(_DATA_DIR) / "database.json") if _DATA_DIR else (Path(__file__).resolve().parent / "database.json")
+SOURCE_DB_PATH = Path(__file__).resolve().parent / "database.json"
+_LOCK = asyncio.Lock()
+ADMIN_ROLES = []
+ALL_ROLES = ["HW: Стажер", "HW: Мл. Сотрудник", "HW: Сотрудник", "HW: Мл.Спектатор", "HW: Спектатор", "HW: Ст.Сотрудник",
+             "FT: Стажер", "FT: Staff", "FT: Агент", "Зам Куратора", "Куратор", "Админ", "СтАдмин", "Владелец"]
+ALL_MODES = ["FunTime", "HolyWorld", "ReallyWorld"]
 
-def get_admin_ids() -> list[int]:
-    """Считывает список ID администраторов из .env"""
-    raw_ids = os.getenv("ADMIN_IDS", "").split(",")
-    return [int(x.strip()) for x in raw_ids if x.strip().isdigit()]
+def _default() -> dict[str, Any]: return {"users": {}, "keys": {}, "applications": [], "mod_versions": [], "stats": {}}
+def sanitize_input(text: str | None, max_length: int = 100) -> str: return str(text or "").strip()[:max_length]
+def _normalize(data: dict | None) -> dict:
+    out = _default(); out.update(data or {})
+    for k, v in _default().items():
+        if not isinstance(out.get(k), type(v)): out[k] = v.copy() if isinstance(v, dict) else []
+    for code, key in out["keys"].items(): key.setdefault("key_code", code); key.setdefault("days", 30); key.setdefault("is_used", 0)
+    for user in out["users"].values():
+        user.setdefault("modes", [user.get("mode", "HolyWorld")])
+    # Migrate keys activated by older bot versions: bind them to the unique
+    # profile with the same target nickname when no owner was stored yet.
+    for code, key in out["keys"].items():
+        if key.get("is_used") and not key.get("used_by"):
+            matches = [(uid, user) for uid, user in out["users"].items()
+                       if user.get("nickname") == key.get("target_nickname")]
+            if len(matches) == 1:
+                uid, user = matches[0]
+                key["used_by"] = int(uid)
+                user.setdefault("key_code", code)
+                user.setdefault("days", key.get("days", 30))
+    for mod in out["mod_versions"]:
+        mod.setdefault("allowed_roles", mod.get("roles", ALL_ROLES.copy())); mod.setdefault("created_at", "")
+    return out
 
-class KeyGenStates(StatesGroup):
-    waiting_for_nick = State()
-    waiting_for_days = State()
+async def load_db() -> dict:
+    if not DB_PATH.exists():
+        data = _default(); await save_db(data); return data
+    try:
+        async with aiofiles.open(DB_PATH, "r", encoding="utf-8") as f: content = await f.read()
+        return _normalize(json.loads(content) if content.strip() else None)
+    except (OSError, json.JSONDecodeError): return _default()
 
-class ModUploadStates(StatesGroup):
-    waiting_for_file = State()
-    waiting_for_version = State()
-    waiting_for_changelog = State()
-    waiting_for_roles = State()
+async def _write(data: dict) -> None:
+    if DB_PATH.exists():
+        backup = DB_PATH.with_suffix(".json.bak")
+        try: shutil.copy2(DB_PATH, backup)
+        except OSError: pass
+    fd, name = tempfile.mkstemp(prefix="database.", suffix=".tmp", dir=DB_PATH.parent); os.close(fd)
+    try:
+        async with aiofiles.open(name, "w", encoding="utf-8") as f: await f.write(json.dumps(_normalize(data), ensure_ascii=False, indent=2))
+        os.replace(name, DB_PATH)
+    finally:
+        if os.path.exists(name): os.unlink(name)
 
-class BroadcastStates(StatesGroup):
-    waiting_for_message = State()
-    waiting_for_confirmation = State()
+async def save_db(data: dict) -> None:
+    async with _LOCK: await _write(data)
+async def init_db() -> None:
+    """Initialize persistent storage without destroying an existing database."""
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not DB_PATH.exists():
+        backup = DB_PATH.with_suffix(".json.bak")
+        if backup.exists():
+            shutil.copy2(backup, DB_PATH)
+        elif SOURCE_DB_PATH.exists() and SOURCE_DB_PATH.resolve() != DB_PATH.resolve():
+            shutil.copy2(SOURCE_DB_PATH, DB_PATH)
+        else:
+            await save_db(_default())
+            return
+    # A deployment can copy a fresh template database over the persistent file.
+    # If that template is empty, prefer the previous atomic-write backup.
+    backup = DB_PATH.with_suffix(".json.bak")
+    try:
+        async with aiofiles.open(DB_PATH, "r", encoding="utf-8") as file:
+            content = await file.read()
+        data = _normalize(json.loads(content) if content.strip() else None)
+        if not data.get("users") and not data.get("keys") and backup.exists():
+            async with aiofiles.open(backup, "r", encoding="utf-8") as file:
+                previous = _normalize(json.loads(await file.read()))
+            if previous.get("users") or previous.get("keys"):
+                shutil.copy2(backup, DB_PATH)
+                data = previous
+    except (OSError, json.JSONDecodeError):
+        if backup.exists():
+            shutil.copy2(backup, DB_PATH)
+            return
+        raise RuntimeError(f"База данных повреждена: {DB_PATH}")
+    # Normalize old records in place, preserving all user/key/event data.
+    await save_db(data)
+async def auto_reload_db_task(interval: int = 10) -> None:
+    while True:
+        await asyncio.sleep(interval)
 
-def get_admin_main_reply_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="👥 Список модераторов"), KeyboardButton(text="🔑 База ключей")],
-        [KeyboardButton(text="🖥 Активные сессии")],
-        [KeyboardButton(text="📥 Заявки на ключи"), KeyboardButton(text="➕ Создать новый ключ")],
-        [KeyboardButton(text="📦 Управление модом"), KeyboardButton(text="📚 Версии мода")],
-        [KeyboardButton(text="📄 Выгрузить базы в TXT")],
-        [KeyboardButton(text="📢 Глобальное сообщение")],
-        [KeyboardButton(text="◀️ Главное меню")]
-    ], resize_keyboard=True)
+def _find_key(db: dict, code: str):
+    clean = sanitize_input(code, 128)
+    direct = db["keys"].get(clean)
+    if direct is not None:
+        return clean, direct
+    for stored_code, value in db["keys"].items():
+        if value.get("key") == clean or value.get("key_code") == clean:
+            return stored_code, value
+    return None, None
 
-def get_cancel_reply_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="❌ Отмена")]], resize_keyboard=True)
+async def get_key(code: str) -> dict | None:
+    return _find_key(await load_db(), code)[1]
+async def redeem_key(code: str, telegram_id: int) -> dict | None:
+    async with _LOCK:
+        db = await load_db(); stored_code, key = _find_key(db, code)
+        logging.info("[AUDIT] redeem_key found=%s stored_id=%s is_used=%s used_by=%s requester=%s",
+                     bool(key), stored_code or "-", key.get("is_used") if key else "-",
+                     key.get("used_by") if key else "-", telegram_id)
+        if not key: return None
+        if key.get("is_used"):
+            # Повторный вход разрешен только тому Telegram-пользователю,
+            # который уже активировал этот ключ ранее.
+            owner_match = key.get("used_by") == telegram_id
+            if not owner_match:
+                profile = db.get("users", {}).get(str(telegram_id), {})
+                entered = sanitize_input(code, 128)
+                owner_match = profile.get("key_code") in {entered, stored_code, key.get("key"), key.get("key_code")}
+                if owner_match:
+                    key["used_by"] = telegram_id
+                    await _write(db)
+            return dict(key) if owner_match else None
+        key["is_used"], key["used_by"] = 1, telegram_id; key["used_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S"); await _write(db); return dict(key)
+async def mark_key_used(code: str) -> None:
+    db = await load_db();
+    if code in db["keys"]: db["keys"][code]["is_used"] = 1; await save_db(db)
 
-async def check_admin_access(message: Message) -> bool:
-    """Проверяет админ-права по ADMIN_IDS из .env."""
-    if message.from_user.id not in get_admin_ids():
-        await message.answer(
-            "⛔ <b>У вас нет доступа к этому разделу!</b>", 
-            parse_mode="HTML", 
-            reply_markup=ReplyKeyboardRemove()
-        )
+async def reset_key_binding(code: str) -> bool:
+    """Сбрасывает владельца ключа и делает его снова доступным для активации."""
+    db = await load_db()
+    key = db["keys"].get(code)
+    if not key:
         return False
+    key["is_used"] = 0
+    key.pop("used_by", None)
+    key.pop("used_at", None)
+    await save_db(db)
+    return True
+async def get_all_keys(limit=15, offset=0):
+    db = await load_db(); out=[]
+    for code, value in db["keys"].items(): item=dict(value); item["key_code"]=code; out.append(item)
+    return out[offset:offset+limit]
+async def find_key_by_prefix(prefix): return next((k for k in (await load_db())["keys"] if k.startswith(prefix)), None)
+async def delete_key(code): db=await load_db(); db["keys"].pop(code, None); await save_db(db)
+async def create_key(target_nickname, role, mode, days):
+    db=await load_db(); code=f"HF-{uuid.uuid4().hex[:12].upper()}"; db["keys"][code]={"key":code,"key_code":code,"target_nickname":sanitize_input(target_nickname,32),"role":role,"mode":mode,"days":max(1,int(days)),"is_used":0,"created_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S")}; await save_db(db); return code
+
+async def get_user(tg): return (await load_db())["users"].get(str(tg))
+async def get_all_users(limit=15, offset=0): return list((await load_db())["users"].values())[offset:offset+limit]
+async def create_user(telegram_id, username, nickname, role, mode, is_approved=0, days=0, key_code=""):
+    db=await load_db(); old=db["users"].get(str(telegram_id), {}); db["users"][str(telegram_id)]={**old,"telegram_id":telegram_id,"username":sanitize_input(username,64),"nickname":sanitize_input(nickname,32),"role":role,"mode":mode,"modes":old.get("modes", [mode]),"discord_id":old.get("discord_id",""),"discord_tag":old.get("discord_tag",""),"is_approved":int(is_approved),"is_banned":old.get("is_banned",0),"days":days,"key_code":key_code,"created_at":old.get("created_at",datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}; db["stats"].setdefault(str(telegram_id),{"user_id":telegram_id,"bans":0,"mutes":0,"checks":0}); await save_db(db)
+async def approve_user(tg):
+    db=await load_db(); user=db["users"].get(str(tg));
+    if user: user["is_approved"]=1; [a.update(status="approved") for a in db["applications"] if a.get("user_id")==tg and a.get("status")=="pending"]; await save_db(db)
+async def set_user_key(tg, code, days=None):
+    db=await load_db(); user=db["users"].get(str(tg));
+    if user: user["key_code"]=code; user["days"]=days if days is not None else user.get("days",0); user["activated_at"]=datetime.now().strftime("%Y-%m-%d %H:%M:%S"); await save_db(db)
+
+async def set_user_role(tg: int, role: str) -> bool:
+    db = await load_db(); user = db["users"].get(str(tg))
+    if not user or role not in ALL_ROLES:
+        return False
+    user["role"] = role
+    await save_db(db)
     return True
 
-# --- ОБРАБОТКА ОТМЕНЫ СОСТОЯНИЙ ---
-@router.message(F.text == "❌ Отмена")
-async def cancel_handler(message: Message, state: FSMContext):
-    if not await check_admin_access(message): return
-    
-    current_state = await state.get_state()
-    if current_state is not None:
-        await state.clear()
-        
-    await message.answer(
-        "❌ <b>Действие отменено.</b>", 
-        parse_mode="HTML", 
-        reply_markup=get_admin_main_reply_kb()
-    )
+async def extend_user_key(tg: int, days: int) -> bool:
+    db = await load_db(); user = db["users"].get(str(tg))
+    if not user or not user.get("key_code"): return False
+    code, key = _find_key(db, user["key_code"])
+    if not key: return False
+    key["days"] = int(days); key["is_used"] = 1; key["is_active"] = 1; user["days"] = int(days)
+    await save_db(db); return True
 
-# --- ГЛАВНОЕ МЕНЮ И НАВИГАЦИЯ ---
-@router.message(F.text == "◀️ Главное меню")
-async def back_to_main_menu(message: Message, state: FSMContext):
-    await state.clear()
-    user = await db.get_user(message.from_user.id)
-    if not user:
-        await message.answer("⛔ <b>У вас нет доступа!</b>", parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
-        return
-        
-    from handlers.auth import get_main_reply_kb
-    await message.answer("🏠 <b>Вы вернулись в главное меню.</b>", parse_mode="HTML", reply_markup=get_main_reply_kb(message.from_user.id))
+async def deactivate_user_key(tg: int) -> bool:
+    db = await load_db(); user = db["users"].get(str(tg));
+    if not user: return False
+    code, key = _find_key(db, user.get("key_code", ""))
+    if key: key["is_active"] = 0
+    user["is_approved"] = 0
+    await save_db(db); return True
 
-@router.message(F.text == "👑 Админ-панель")
-async def admin_panel_main(message: Message):
-    if not await check_admin_access(message): return
+async def delete_user_account(tg: int, delete_key: bool) -> bool:
+    db = await load_db(); user = db["users"].pop(str(tg), None)
+    if not user: return False
+    if delete_key:
+        code, key = _find_key(db, user.get("key_code", ""))
+        if code: db["keys"].pop(code, None)
+    await save_db(db); return True
 
-    await message.answer(
-        "👑 <b>Панель Высшей Администрации HolyFake</b>\n\nВыберите нужный раздел в меню ниже:",
-        parse_mode="HTML",
-        reply_markup=get_admin_main_reply_kb()
-    )
+async def get_moderation_logs(tg: int, kind: str = "all") -> list[dict]:
+    db = await load_db(); result = []
+    if kind in ("all", "punishments"): result.extend(db.get("punishment_logs", {}).get(str(tg), []))
+    if kind in ("all", "checks"): result.extend(db.get("check_logs", {}).get(str(tg), []))
+    return list(reversed(result))
 
-@router.message(F.text == "🖥 Активные сессии")
-async def active_sessions(message: Message):
-    if not await check_admin_access(message): return
-    users = await db.get_all_users(limit=100000, offset=0); rows = []; text = "🖥 <b>Активные Minecraft-сессии</b>\n\n"
-    for user in users:
-        if not user.get("client_last_seen"): continue
-        text += f"🟢 <b>{user.get('nickname','')}</b> | {user.get('role','')} | <code>{user.get('telegram_id')}</code>\n"
-        rows.append([InlineKeyboardButton(text=f"⛔ Отключить {user.get('nickname','')}", callback_data=f"session_kick_{user.get('telegram_id')}")])
-    if not rows: text += "Активных сессий нет."
-    await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
-
-@router.callback_query(F.data.startswith("session_kick_"))
-async def session_kick(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
-    await db.set_client_kicked(int(callback.data.removeprefix("session_kick_")), True)
-    await callback.answer("Сессия отключена.", show_alert=True)
-
-# --- 1. ТАБЛИЦА БАЗЫ МОДЕРАТОРОВ ---
-@router.message(F.text == "👥 Список модераторов")
-async def view_mods_table(message: Message):
-    if not await check_admin_access(message): return
-
-    users = await db.get_all_users(limit=15, offset=0)
-    if not users:
-        await message.answer("👥 <b>База модераторов пуста.</b>", parse_mode="HTML")
-        return
-
-    text = "👥 <b>База модераторов (Таблица):</b>\n\n"
-    kb_rows = []
-
-    for idx, u in enumerate(users, start=1):
-        status_icon = "🔴" if u.get("is_banned") else ("🟢" if u.get("is_approved") else "⏳")
-        client_icon = "🔌"
-        last_seen = u.get("client_last_seen")
-        if last_seen:
-            try:
-                seen = datetime.fromisoformat(last_seen)
-                if seen.tzinfo is None: seen = seen.replace(tzinfo=timezone.utc)
-                client_icon = "🟢" if (datetime.now(timezone.utc) - seen).total_seconds() <= 45 else "🔴"
-            except ValueError:
-                pass
-        username = f"@{u['username']}" if u.get("username") else "без username"
-        text += f"{idx}. {status_icon} <b>{u['nickname']}</b> | Роль: <code>{u['role']}</code> | Minecraft: {client_icon}\n"
-        text += f"   └ {username} | TG ID: <code>{u['telegram_id']}</code>\n"
-        
-        kb_rows.append([
-            InlineKeyboardButton(text=f"👤 Профиль {u['nickname']}", callback_data=f"profile_usr_{u['telegram_id']}")
-        ])
-
-    await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
-
-@router.callback_query(F.data.startswith("ban_usr_"))
-async def process_ban_usr(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids():
-        await callback.answer("⛔ Нет доступа!", show_alert=True)
-        return
-
-    target_tg = int(callback.data.split("_")[2])
-    if target_tg in get_admin_ids():
-        await callback.answer("⛔ Администратора нельзя забанить.", show_alert=True)
-        return
-    await db.ban_user(target_tg)
-    await callback.answer("🔒 Пользователь забанен!", show_alert=True)
-    await callback.message.delete()
-
-@router.callback_query(F.data.startswith("kick_usr_"))
-async def process_kick_usr(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids():
-        await callback.answer("⛔ Нет доступа!", show_alert=True)
-        return
-
-    target_tg = int(callback.data.split("_")[2])
-    await db.kick_user(target_tg)
-    await callback.answer("❌ Пользователь удален из базы!", show_alert=True)
-    await callback.message.delete()
-
-# --- 2. ТАБЛИЦА БАЗЫ КЛЮЧЕЙ ---
-@router.message(F.text == "🔑 База ключей")
-async def view_keys_table(message: Message):
-    if not await check_admin_access(message): return
-
-    keys = await db.get_all_keys(limit=15, offset=0)
-    if not keys:
-        await message.answer("🔑 <b>База ключей пуста.</b>", parse_mode="HTML")
-        return
-
-    text = "🔑 <b>Единая база ключей (Таблица):</b>\n\n"
-    kb_rows = []
-
-    for idx, k in enumerate(keys, start=1):
-        if isinstance(k, dict):
-            key_code = k.get("key_code") or k.get("key") or k.get("code") or "N/A"
-            target_nick = k.get("target_nickname") or k.get("nickname") or "Неизвестно"
-            is_used = k.get("is_used", False)
-        else:
-            key_code = str(k[0]) if len(k) > 0 else "N/A"
-            target_nick = str(k[1]) if len(k) > 1 else "Неизвестно"
-            is_used = bool(k[2]) if len(k) > 2 else False
-
-        status = "🔴 Использован" if is_used else "🟢 Активен"
-        short_key = key_code[:16] if key_code != "N/A" else "none"
-        
-        text += f"{idx}. <b>{target_nick}</b> — <code>{key_code}</code> ({status})\n"
-        kb_rows.append([
-            InlineKeyboardButton(
-                text=f"🗑️ Удалить ключ {target_nick}", 
-                callback_data=f"del_k_{short_key}"
-            ),
-            InlineKeyboardButton(
-                text="🔓 Сбросить привязку",
-                callback_data=f"reset_k_{short_key}"
-            )
-        ])
-
-    await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
-    
-@router.callback_query(F.data.startswith("del_k_"))
-async def process_del_key(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids():
-        await callback.answer("⛔ Нет доступа!", show_alert=True)
-        return
-
-    short_key = callback.data.replace("del_k_", "")
-    full_key = await db.find_key_by_prefix(short_key)
-    
-    if full_key:
-        await db.delete_key(full_key)
-        await callback.answer("🗑️ Ключ удален из базы!", show_alert=True)
+async def toggle_user_mode(tg: int, mode: str) -> tuple[bool, list[str]]:
+    db = await load_db(); user = db["users"].get(str(tg))
+    if not user or mode not in ALL_MODES: return False, []
+    modes = [item for item in user.get("modes", [user.get("mode", mode)]) if item in ALL_MODES]
+    if mode in modes:
+        if len(modes) == 1: return True, modes
+        modes.remove(mode)
     else:
-        await callback.answer("❌ Ключ не найден или уже был удален.", show_alert=True)
-        
-    await callback.message.delete()
+        modes.append(mode)
+    user["modes"] = modes; user["mode"] = modes[0]
+    await save_db(db)
+    return True, modes
+async def update_discord(tg, tag): db=await load_db(); db["users"].get(str(tg), {}).update(discord_tag=sanitize_input(tag,50)); await save_db(db)
+async def get_user_stats(tg): return (await load_db())["stats"].get(str(tg),{"bans":0,"mutes":0,"checks":0})
+async def ban_user(tg):
+    admin_ids = {int(item.strip()) for item in os.getenv("ADMIN_IDS", "").split(",") if item.strip().isdigit()}
+    if int(tg) in admin_ids: return False
+    db=await load_db(); db["users"].get(str(tg), {}).update(is_banned=1); await save_db(db); return True
+async def kick_user(tg): db=await load_db(); db["users"].pop(str(tg),None); await save_db(db)
 
-@router.callback_query(F.data.startswith("profile_usr_"))
-async def moderator_profile(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
-    user = await db.get_user(int(callback.data.removeprefix("profile_usr_")))
-    if not user: return await callback.answer("Пользователь не найден.", show_alert=True)
-    tg = user["telegram_id"]
-    await callback.answer()
-    await callback.message.edit_text(f"👤 <b>Профиль модератора</b>\n\nНик: <code>{user.get('nickname','')}</code>\nUsername: @{user.get('username','—')}\nTG ID: <code>{tg}</code>\nРанг: <b>{user.get('role','')}</b>\nРежимы: <b>{', '.join(user.get('modes',[user.get('mode','')]))}</b>\nКлюч: <code>{user.get('key_code','не привязан')}</code>\nСрок: {user.get('days',0)} дней", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎭 Ранг", callback_data=f"role_usr_{tg}"), InlineKeyboardButton(text="🎮 Режимы", callback_data=f"mode_usr_{tg}")],
-        [InlineKeyboardButton(text="⏳ Продлить ключ", callback_data=f"extend_usr_{tg}"), InlineKeyboardButton(text="⛔ Деактивировать", callback_data=f"deactivate_usr_{tg}")],
-        [InlineKeyboardButton(text="📊 Наказания и проверки", callback_data=f"logs_usr_{tg}")],
-        [InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data=f"delete_usr_{tg}")]
-    ]))
+async def create_application(user_id, app_type, comment=""):
+    db=await load_db(); app_id=max([int(a.get("id",0)) for a in db["applications"]],default=0)+1; db["applications"].append({"id":app_id,"user_id":user_id,"type":app_type if app_type in ("entry_request","key_request") else "entry_request","comment":sanitize_input(comment,500),"status":"pending"}); await save_db(db); return app_id
+async def get_pending_applications(): return [a for a in (await load_db())["applications"] if a.get("status")=="pending"]
+async def update_app_status(app_id,status):
+    db=await load_db();
+    for a in db["applications"]:
+        if a.get("id")==app_id: a["status"]=status
+    await save_db(db)
 
-@router.callback_query(F.data.startswith("extend_usr_"))
-async def extend_user(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
-    tg = int(callback.data.removeprefix("extend_usr_")); rows = [[InlineKeyboardButton(text=f"{days} дней", callback_data=f"extend_set_{tg}_{days}")] for days in (7, 14, 30, 60, 90, 180, 365)]
-    await callback.answer(); await callback.message.edit_text("⏳ <b>Выберите новый срок ключа:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+async def create_login_request(owner_id: int, code: str, ip: str, location: str) -> str:
+    db = await load_db()
+    request_id = uuid.uuid4().hex
+    db.setdefault("login_requests", {})[request_id] = {"id": request_id, "owner_id": owner_id, "key_code": code,
+        "ip": ip, "location": location, "status": "pending", "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    await save_db(db)
+    return request_id
 
-@router.callback_query(F.data.startswith("extend_set_"))
-async def extend_user_set(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
-    _, _, tg, days = callback.data.split("_"); ok = await db.extend_user_key(int(tg), int(days)); await callback.answer("Ключ продлён" if ok else "Ключ не найден", show_alert=True); await callback.message.delete()
+async def get_login_request(request_id: str) -> dict | None:
+    return (await load_db()).get("login_requests", {}).get(request_id)
 
-@router.callback_query(F.data.startswith("deactivate_usr_"))
-async def deactivate_user(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
-    await db.deactivate_user_key(int(callback.data.removeprefix("deactivate_usr_"))); await callback.answer("Доступ деактивирован", show_alert=True); await callback.message.delete()
+async def update_login_request(request_id: str, status: str) -> bool:
+    db = await load_db(); item = db.get("login_requests", {}).get(request_id)
+    if not item: return False
+    item["status"] = status; item["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    await save_db(db); return True
 
-@router.callback_query(F.data.startswith("delete_usr_"))
-async def delete_user_prompt(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
-    tg = callback.data.removeprefix("delete_usr_"); await callback.answer(); await callback.message.edit_text("🗑 <b>Удалить аккаунт вместе с его ключом?</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Удалить всё", callback_data=f"delete_set_{tg}_1"), InlineKeyboardButton(text="Оставить ключ", callback_data=f"delete_set_{tg}_0")]]))
+async def set_client_kicked(owner_id: int, kicked: bool) -> None:
+    db = await load_db(); user = db.get("users", {}).get(str(owner_id))
+    if user:
+        user["client_kicked"] = bool(kicked)
+        await save_db(db)
 
-@router.callback_query(F.data.startswith("delete_set_"))
-async def delete_user_confirm(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
-    _, _, tg, key = callback.data.split("_"); await db.delete_user_account(int(tg), key == "1"); await callback.answer("Аккаунт удалён", show_alert=True); await callback.message.delete()
+async def update_user_setting(owner_id: int, name: str, value: bool) -> None:
+    db = await load_db(); user = db.get("users", {}).get(str(owner_id))
+    if user:
+        user.setdefault("settings", {})[name] = bool(value)
+        await save_db(db)
 
-@router.callback_query(F.data.startswith("logs_usr_"))
-async def moderator_logs(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
-    tg = int(callback.data.removeprefix("logs_usr_")); logs = await db.get_moderation_logs(tg)
-    if not logs: text = "📊 История наказаний и проверок пуста."
-    else:
-        text = "📊 <b>История действий</b>\n\n"
-        for item in logs[:15]: text += f"• {item.get('created_at','')} | {item.get('action','')} | <b>{item.get('target','')}</b> | {item.get('duration','—')} | {item.get('reason','—')}\n"
-    await callback.answer(); await callback.message.edit_text(text, parse_mode="HTML")
+async def record_moderation_event(owner_id: int, event_type: str, target: str, action: str, duration: str, reason: str) -> None:
+    db = await load_db(); user_id = str(owner_id)
+    bucket = "punishment_logs" if event_type == "punishment" else "check_logs"
+    db.setdefault(bucket, {}).setdefault(user_id, []).append({"target": target, "action": action, "duration": duration, "reason": reason, "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    stats = db["stats"].setdefault(user_id, {"user_id": owner_id, "bans": 0, "mutes": 0, "checks": 0})
+    if event_type == "punishment": stats["mutes" if action == "Мут" else "bans"] = stats.get("mutes" if action == "Мут" else "bans", 0) + 1
+    else: stats["checks"] = stats.get("checks", 0) + 1
+    await save_db(db)
 
-@router.callback_query(F.data.startswith("role_usr_"))
-async def process_role_usr(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids():
-        await callback.answer("⛔ Нет доступа!", show_alert=True)
-        return
+async def add_irc_message(owner_id: int, nickname: str, role: str, text: str, is_admin: bool = False, recipient_id: int | None = None) -> int:
+    db = await load_db(); messages = db.setdefault("irc_messages", [])
+    message_id = max([int(item.get("id", 0)) for item in messages], default=0) + 1
+    messages.append({"id": message_id, "owner_id": owner_id, "recipient_id": recipient_id, "nickname": nickname, "role": role, "is_admin": is_admin, "text": sanitize_input(text, 500), "created_at": datetime.now().strftime("%H:%M:%S")})
+    db["irc_messages"] = messages[-500:]; await save_db(db); return message_id
+
+async def get_irc_messages(after_id: int = 0, recipient_id: int | None = None) -> list[dict]:
+    return [item for item in (await load_db()).get("irc_messages", []) if int(item.get("id", 0)) > after_id and (item.get("recipient_id") is None or item.get("recipient_id") == recipient_id or item.get("owner_id") == recipient_id)]
+
+async def set_meme_effect(owner_id: int, scenario: str, target: str, started_at: int) -> None:
+    db = await load_db(); db.setdefault("meme_effects", {})[str(owner_id)] = {"owner_id": owner_id, "scenario": scenario, "target": target, "started_at": started_at, "updated_at": datetime.now().timestamp()}; await save_db(db)
+
+async def remove_meme_effect(owner_id: int) -> None:
+    db = await load_db(); db.setdefault("meme_effects", {}).pop(str(owner_id), None); await save_db(db)
+
+async def set_irc_mute(owner_id: int, target: str, duration: str, reason: str) -> None:
+    db = await load_db(); db.setdefault("irc_mutes", {})[target.casefold()] = {"target": target, "duration": duration, "reason": reason, "owner_id": owner_id, "created_at": datetime.now().timestamp()}; await save_db(db)
+
+async def is_irc_muted(target: str) -> bool:
+    item = (await load_db()).get("irc_mutes", {}).get(target.casefold())
+    if not item: return False
+    raw = item.get("duration", "0")
     try:
-        target_tg = int(callback.data.removeprefix("role_usr_"))
-    except ValueError:
-        await callback.answer("Некорректный пользователь.", show_alert=True)
-        return
-    user = await db.get_user(target_tg)
-    if not user:
-        await callback.answer("Пользователь не найден.", show_alert=True)
-        return
-    rows = [[InlineKeyboardButton(text=f"🎭 {role}", callback_data=f"role_set_{target_tg}_{index}")]
-            for index, role in enumerate(db.ALL_ROLES)]
-    rows.append([InlineKeyboardButton(text="◀️ Отмена", callback_data="role_cancel")])
-    await callback.answer()
-    await callback.message.edit_text(
-        f"🎭 <b>Выберите ранг</b>\n\n👤 {user.get('nickname', target_tg)}\n"
-        f"TG ID: <code>{target_tg}</code>", parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
-    )
-
-@router.callback_query(F.data.startswith("role_set_"))
-async def process_role_set(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids():
-        await callback.answer("⛔ Нет доступа!", show_alert=True); return
-    parts = callback.data.split("_")
-    try:
-        target_tg, role_index = int(parts[2]), int(parts[3])
-        new_role = db.ALL_ROLES[role_index]
-    except (ValueError, IndexError):
-        await callback.answer("Некорректный ранг.", show_alert=True); return
-    if not await db.set_user_role(target_tg, new_role):
-        await callback.answer("Пользователь не найден.", show_alert=True); return
-    await callback.answer(f"Ранг изменён: {new_role}", show_alert=True)
-    await callback.message.edit_text(f"✅ <b>Ранг изменён</b>\n\n🎭 Новый ранг: <code>{new_role}</code>", parse_mode="HTML")
-
-@router.callback_query(F.data == "role_cancel")
-async def process_role_cancel(callback: CallbackQuery):
-    await callback.answer("Отменено")
-    await callback.message.delete()
-
-@router.callback_query(F.data.startswith("mode_usr_"))
-async def process_mode_usr(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids():
-        await callback.answer("⛔ Нет доступа!", show_alert=True); return
-    try: target_tg = int(callback.data.removeprefix("mode_usr_"))
-    except ValueError:
-        await callback.answer("Некорректный пользователь.", show_alert=True); return
-    user = await db.get_user(target_tg)
-    if not user:
-        await callback.answer("Пользователь не найден.", show_alert=True); return
-    modes = set(user.get("modes", [user.get("mode", "HolyWorld")]))
-    rows = [[InlineKeyboardButton(text=("✅ " if mode in modes else "⬜ ") + mode, callback_data=f"mode_set_{target_tg}_{index}")]
-            for index, mode in enumerate(db.ALL_MODES)]
-    rows.append([InlineKeyboardButton(text="◀️ Отмена", callback_data="mode_cancel")])
-    await callback.answer()
-    await callback.message.edit_text(f"🎮 <b>Режимы модератора</b>\n\n👤 {user.get('nickname', target_tg)}\nМожно выбрать несколько режимов.", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
-
-@router.callback_query(F.data.startswith("mode_set_"))
-async def process_mode_set(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids():
-        await callback.answer("⛔ Нет доступа!", show_alert=True); return
-    parts = callback.data.split("_")
-    try: target_tg, index = int(parts[2]), int(parts[3]); mode = db.ALL_MODES[index]
-    except (ValueError, IndexError):
-        await callback.answer("Некорректный режим.", show_alert=True); return
-    ok, modes = await db.toggle_user_mode(target_tg, mode)
-    if not ok:
-        await callback.answer("Пользователь не найден.", show_alert=True); return
-    await callback.answer("Режимы обновлены")
-    rows = [[InlineKeyboardButton(text=("✅ " if item in modes else "⬜ ") + item, callback_data=f"mode_set_{target_tg}_{i}")]
-            for i, item in enumerate(db.ALL_MODES)]
-    rows.append([InlineKeyboardButton(text="◀️ Закрыть", callback_data="mode_cancel")])
-    await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
-
-@router.callback_query(F.data == "mode_cancel")
-async def process_mode_cancel(callback: CallbackQuery):
-    await callback.answer("Готово")
-    await callback.message.delete()
-
-@router.callback_query(F.data.startswith("reset_k_"))
-async def process_reset_key(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids():
-        await callback.answer("⛔ Нет доступа!", show_alert=True)
-        return
-    prefix = callback.data.replace("reset_k_", "")
-    full_key = await db.find_key_by_prefix(prefix)
-    if not full_key or not await db.reset_key_binding(full_key):
-        await callback.answer("❌ Ключ не найден.", show_alert=True)
-        return
-    await callback.answer("🔓 Привязка ключа сброшена.", show_alert=True)
-
-# --- 3. ЕДИНАЯ ТАБЛИЦА ЗАЯВОК (Вход и Смена ключа) ---
-@router.message(F.text == "📥 Заявки на ключи")
-@router.message(F.text == "📥 Все заявки")
-async def view_apps_table(message: Message):
-    if not await check_admin_access(message): return
-
-    apps = await db.get_pending_applications()
-    if not apps:
-        await message.answer("📥 <b>Активных заявок нет.</b>", parse_mode="HTML")
-        return
-
-    text = "📥 <b>Единая база заявок (Вход и Смена ключа):</b>\n\n"
-    kb_rows = []
-
-    for idx, app in enumerate(apps, start=1):
-        user_id = app["user_id"]
-        app_user = await db.get_user(user_id)
-        
-        # Различаем тип заявки
-        app_type = app.get("type", "entry_request")
-        type_tag = "🔑 [Смена ключа]" if app_type == "key_request" else "🚪 [Заявка на вход]"
-        
-        nick = app_user["nickname"] if app_user else f"ID {user_id}"
-        comment_str = f"\n   ├ 💬 <i>{app['comment']}</i>" if app.get("comment") else ""
-        
-        text += f"{idx}. {type_tag} <b>{nick}</b>{comment_str}\n"
-        
-        kb_rows.append([
-            InlineKeyboardButton(text=f"✅ Принять ({nick})", callback_data=f"app_accept_{app['id']}_{user_id}"),
-            InlineKeyboardButton(text=f"❌ Отклонить", callback_data=f"app_reject_{app['id']}_{user_id}")
-        ])
-
-    await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
-
-@router.callback_query(F.data.startswith("app_accept_"))
-@router.callback_query(F.data.startswith("key_accept_"))
-async def process_accept_app(callback: CallbackQuery, bot):
-    if callback.from_user.id not in get_admin_ids():
-        await callback.answer("⛔ Нет доступа!", show_alert=True)
-        return
-
-    parts = callback.data.split("_")
-    app_id = int(parts[2])
-    user_id = int(parts[3])
-    if len(parts) == 4:
-        rows = [[InlineKeyboardButton(text=f"{days} дней", callback_data=f"app_accept_{app_id}_{user_id}_{days}")] for days in (7, 14, 30, 60, 90, 180, 365)]
-        await callback.answer(); await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)); return
-    selected_days = int(parts[4])
-    
-    user = await db.get_user(user_id)
-    if not user:
-        await callback.answer("❌ Пользователь не найден!", show_alert=True)
-        return
-
-    app = next((item for item in (await db.load_db()).get("applications", []) if item.get("id") == app_id), None)
-    await db.approve_user(user_id)
-    new_key = user.get("key_code", "")
-    days = user.get("days", 30)
-    if app and app.get("type") == "key_request":
-        new_key = await db.create_key(user["nickname"], user["role"], user["mode"], selected_days)
-        days = selected_days
-        await db.set_user_key(user_id, new_key, days)
-
-    await db.update_app_status(app_id, "approved")
-    
-    try:
-        await bot.send_message(
-            user_id,
-            f"🎉 <b>Ваша заявка одобрена Администрацией!</b>\n\n"
-            f"🔑 <b>Ваш активный ключ:</b>\n<code>{new_key}</code>\n\n"
-            f"⏳ <b>Срок действия:</b> {days} дней.",
-            parse_mode="HTML"
-        )
-    except Exception:
-        pass
-
-    await callback.answer("✅ Заявка одобрена, новый ключ выдан!", show_alert=True)
-    await callback.message.delete()
-
-@router.callback_query(F.data.startswith("app_reject_"))
-@router.callback_query(F.data.startswith("key_reject_"))
-async def process_reject_app(callback: CallbackQuery, bot):
-    if callback.from_user.id not in get_admin_ids():
-        await callback.answer("⛔ Нет доступа!", show_alert=True)
-        return
-
-    parts = callback.data.split("_")
-    app_id = int(parts[2])
-    user_id = int(parts[3]) if len(parts) > 3 else None
-    
-    await db.update_app_status(app_id, "rejected")
-    
-    if user_id:
-        try:
-            await bot.send_message(
-                user_id,
-                "❌ <b>Ваша заявка была отклонена Администрацией.</b>",
-                parse_mode="HTML"
-            )
-        except Exception:
-            pass
-
-    await callback.answer("❌ Заявка отклонена.", show_alert=True)
-    await callback.message.delete()
-
-# --- ГЕНЕРАЦИЯ КЛЮЧА ---
-@router.message(F.text == "➕ Создать новый ключ")
-async def gen_key_start(message: Message, state: FSMContext):
-    if not await check_admin_access(message): return
-
-    await message.answer("🔑 <b>Генератор ключей</b>\n\n✏️ Введите никнейм модератора:", reply_markup=get_cancel_reply_kb(), parse_mode="HTML")
-    await state.set_state(KeyGenStates.waiting_for_nick)
-
-@router.message(KeyGenStates.waiting_for_nick)
-async def gen_key_nick(message: Message, state: FSMContext):
-    nick = db.sanitize_input(message.text, max_length=32)
-    await state.update_data(nick=nick)
-    await message.answer("⏳ Укажите срок действия ключа в днях (число):", parse_mode="HTML", reply_markup=get_cancel_reply_kb())
-    await state.set_state(KeyGenStates.waiting_for_days)
-
-@router.message(KeyGenStates.waiting_for_days)
-async def gen_key_days(message: Message, state: FSMContext):
-    if not message.text.isdigit() or int(message.text) <= 0 or int(message.text) > 3650:
-        await message.answer("❌ <b>Ошибка!</b> Введите число дней (от 1 до 3650).", parse_mode="HTML")
-        return
-    
-    data = await state.get_data()
-    key_code = await db.create_key(target_nickname=data["nick"], role="Стажер", mode="HolyWorld", days=int(message.text))
-    await state.clear()
-    
-    await message.answer(
-        f"🎉 <b>Секретный ключ создан!</b>\n\n🔑 <b>Ключ:</b>\n<code>{key_code}</code>\n\n👤 <b>Для:</b> <code>{data['nick']}</code>\n⏳ <b>Срок:</b> {message.text} дней",
-        parse_mode="HTML",
-        reply_markup=get_admin_main_reply_kb()
-    )
-
-# --- ЭКСПОРТ В TXT ---
-@router.message(F.text == "📄 Выгрузить базы в TXT")
-async def export_txt_start(message: Message):
-    if not await check_admin_access(message): return
-
-    for table in ["users", "keys", "applications"]:
-        filename = await db.export_table_to_txt(table)
-        file = FSInputFile(filename)
-        await message.answer_document(document=file, caption=f"📥 База <code>{table}.txt</code>", parse_mode="HTML")
-        if os.path.exists(filename):
-            os.remove(filename)
-
-# --- УПРАВЛЕНИЕ МОДОМ ---
-@router.message(F.text == "📦 Управление модом")
-async def admin_mod_mgmt(message: Message):
-    if not await check_admin_access(message): return
-
-    mod = await db.get_latest_mod()
-    status = f"Активная версия: <b>{mod['version_name']}</b>" if mod else "Мод еще не загружен."
-    
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="⬆️ Загрузить версию мода")],
-        [KeyboardButton(text="🗑️ Удалить текущую версию")],
-        [KeyboardButton(text="👑 Админ-панель")]
-    ], resize_keyboard=True)
-
-    await message.answer(f"📦 <b>Управление HF-Moderation</b>\n\n{status}", parse_mode="HTML", reply_markup=kb)
-
-@router.message(F.text == "🗑️ Удалить текущую версию")
-async def process_del_mod(message: Message):
-    if not await check_admin_access(message): return
-
-    mod = await db.get_latest_mod()
-    if mod:
-        await db.delete_mod_version(mod["id"])
-        await message.answer("🗑️ <b>Версия мода была удалена!</b>", parse_mode="HTML", reply_markup=get_admin_main_reply_kb())
-    else:
-        await message.answer("❌ Активная версия мода не найдена.", parse_mode="HTML", reply_markup=get_admin_main_reply_kb())
-
-@router.message(F.text == "⬆️ Загрузить версию мода")
-async def upload_mod_start(message: Message, state: FSMContext):
-    if not await check_admin_access(message): return
-
-    await message.answer("📦 <b>Загрузка мода</b>\n\n📂 Отправьте файл <code>.jar</code> или <code>.zip</code> (до 50 МБ):", reply_markup=get_cancel_reply_kb(), parse_mode="HTML")
-    await state.set_state(ModUploadStates.waiting_for_file)
-
-@router.message(ModUploadStates.waiting_for_file, F.document)
-async def upload_mod_file(message: Message, state: FSMContext):
-    file_name = message.document.file_name.lower()
-    file_size = message.document.file_size
-    
-    if not (file_name.endswith('.jar') or file_name.endswith('.zip')):
-        await message.answer("❌ <b>Разрешены только файлы .jar и .zip!</b>", parse_mode="HTML")
-        return
-        
-    if file_size > 50 * 1024 * 1024:
-        await message.answer("❌ <b>Размер файла не должен превышать 50 МБ.</b>", parse_mode="HTML")
-        return
-
-    await state.update_data(file_id=message.document.file_id)
-    await message.answer("🏷️ Введите имя версии (например: <code>v1.3.0</code>):", parse_mode="HTML", reply_markup=get_cancel_reply_kb())
-    await state.set_state(ModUploadStates.waiting_for_version)
-
-@router.message(ModUploadStates.waiting_for_version)
-async def upload_mod_version(message: Message, state: FSMContext):
-    version = db.sanitize_input(message.text, max_length=20)
-    await state.update_data(version=version)
-    await message.answer("📝 Введите Чейнджлог (список изменений):", parse_mode="HTML", reply_markup=get_cancel_reply_kb())
-    await state.set_state(ModUploadStates.waiting_for_changelog)
-
-@router.message(ModUploadStates.waiting_for_changelog)
-async def upload_mod_changelog(message: Message, state: FSMContext):
-    changelog = db.sanitize_input(message.text, max_length=1000)
-    data = await state.get_data()
-    
-    await state.update_data(changelog=changelog, selected_roles=[])
-    rows = [[InlineKeyboardButton(text=f"⬜ {role}", callback_data=f"mod_role_{index}")] for index, role in enumerate(db.ALL_ROLES)]
-    rows.append([InlineKeyboardButton(text="✅ Опубликовать для выбранных", callback_data="mod_publish")])
-    await message.answer("🔐 <b>Выберите, кому доступна загрузка этой версии:</b>\nМожно выбрать несколько ролей.", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
-    await state.set_state(ModUploadStates.waiting_for_roles)
-
-@router.callback_query(F.data.startswith("mod_role_"), ModUploadStates.waiting_for_roles)
-async def toggle_mod_role(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
-    try: index = int(callback.data.removeprefix("mod_role_")); role = db.ALL_ROLES[index]
-    except (ValueError, IndexError): return await callback.answer("Некорректная роль.", show_alert=True)
-    data = await state.get_data(); roles = list(data.get("selected_roles", []))
-    if role in roles: roles.remove(role)
-    else: roles.append(role)
-    await state.update_data(selected_roles=roles)
-    rows = [[InlineKeyboardButton(text=("✅ " if item in roles else "⬜ ") + item, callback_data=f"mod_role_{i}")] for i, item in enumerate(db.ALL_ROLES)]
-    rows.append([InlineKeyboardButton(text="✅ Опубликовать для выбранных", callback_data="mod_publish")])
-    await callback.answer("Обновлено")
-    await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
-
-@router.callback_query(F.data == "mod_publish", ModUploadStates.waiting_for_roles)
-async def publish_mod(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
-    data = await state.get_data(); roles = data.get("selected_roles", [])
-    if not roles: return await callback.answer("Выберите хотя бы одну роль.", show_alert=True)
-    if not await db.save_mod_version(data["version"], data["changelog"], data["file_id"], roles):
-        await callback.answer("Такая версия уже существует.", show_alert=True); return
-    await state.clear(); await callback.answer("Мод опубликован", show_alert=True)
-    await callback.message.edit_text("🎉 <b>Версия мода опубликована.</b>", parse_mode="HTML")
-
-@router.message(F.text == "📚 Версии мода")
-async def list_mod_versions(message: Message):
-    if not await check_admin_access(message): return
-    versions = await db.get_all_mod_versions()
-    if not versions:
-        await message.answer("📚 <b>Версий мода пока нет.</b>", parse_mode="HTML"); return
-    rows = []
-    text = "📚 <b>Версии HF-Moderation</b>\n\n"
-    for version in versions:
-        text += f"• <b>{version.get('version_name','')}</b> | {version.get('created_at','')}\n"
-        rows.append([InlineKeyboardButton(text=f"📄 {version.get('version_name','')}", callback_data=f"mod_view_{version.get('id')}")])
-    await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
-
-@router.callback_query(F.data.startswith("mod_view_"))
-async def view_mod_version(callback: CallbackQuery):
-    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
-    try: version_id = int(callback.data.removeprefix("mod_view_"))
-    except ValueError: return await callback.answer("Некорректная версия.", show_alert=True)
-    versions = await db.get_all_mod_versions(); version = next((item for item in versions if item.get("id") == version_id), None)
-    if not version: return await callback.answer("Версия не найдена.", show_alert=True)
-    roles = ", ".join(version.get("allowed_roles", version.get("roles", [])))
-    await callback.answer()
-    await callback.message.edit_text(f"📦 <b>HF-Moderation {version.get('version_name','')}</b>\n\n📅 Создана: {version.get('created_at','')}\n🔐 Роли: {roles}\n\n📝 <b>Чейнджлог:</b>\n{version.get('changelog','—')}", parse_mode="HTML")
-
-@router.message(F.text == "📢 Глобальное сообщение")
-async def broadcast_start(message: Message, state: FSMContext):
-    if not await check_admin_access(message): return
-    await message.answer("📢 <b>Глобальное сообщение</b>\nОтправьте текст, фото или файл с подписью. Сообщение получат все одобренные пользователи.", parse_mode="HTML", reply_markup=get_cancel_reply_kb())
-    await state.set_state(BroadcastStates.waiting_for_message)
-
-@router.message(BroadcastStates.waiting_for_message)
-async def broadcast_send(message: Message, state: FSMContext, bot):
-    if not await check_admin_access(message): return
-    await state.update_data(source_chat=message.chat.id, source_message=message.message_id)
-    await message.answer("⚠️ <b>Проверьте глобальное сообщение</b>\nОно будет отправлено всем одобренным модераторам.", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Изменить", callback_data="broadcast_edit"), InlineKeyboardButton(text="✅ Сохранить", callback_data="broadcast_confirm")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel")]
-    ]))
-    await bot.copy_message(chat_id=message.chat.id, from_chat_id=message.chat.id, message_id=message.message_id)
-    await state.set_state(BroadcastStates.waiting_for_confirmation)
-
-async def _send_broadcast(state: FSMContext, bot) -> int:
-    data = await state.get_data(); users = await db.get_all_users(limit=100000, offset=0); sent = 0
-    for user in users:
-        if not user.get("is_approved") or user.get("is_banned"): continue
-        try:
-            await bot.copy_message(chat_id=user["telegram_id"], from_chat_id=data["source_chat"], message_id=data["source_message"])
-            sent += 1
-        except Exception:
-            continue
-    return sent
-
-@router.callback_query(F.data == "broadcast_confirm", BroadcastStates.waiting_for_confirmation)
-async def broadcast_confirm(callback: CallbackQuery, state: FSMContext, bot):
-    sent = await _send_broadcast(state, bot); await state.clear(); await callback.answer("Рассылка отправлена", show_alert=True)
-    await callback.message.edit_text(f"✅ <b>Глобальное сообщение отправлено.</b> Получателей: {sent}", parse_mode="HTML")
-
-@router.callback_query(F.data == "broadcast_edit", BroadcastStates.waiting_for_confirmation)
-async def broadcast_edit(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(BroadcastStates.waiting_for_message); await callback.answer("Отправьте исправленный текст или файл")
-    await callback.message.edit_text("✏️ Отправьте новое сообщение для предпросмотра.", parse_mode="HTML")
-
-@router.callback_query(F.data == "broadcast_cancel", BroadcastStates.waiting_for_confirmation)
-async def broadcast_cancel(callback: CallbackQuery, state: FSMContext):
-    await state.clear(); await callback.answer("Рассылка отменена", show_alert=True); await callback.message.edit_text("❌ Рассылка отменена.", parse_mode="HTML")
+        value, unit = int(raw[:-1]), raw[-1].lower(); seconds = value * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
+        if datetime.now().timestamp() - float(item.get("created_at", 0)) >= seconds:
+            return False
+    except (ValueError, KeyError):
+        return True
+    return True
+async def get_latest_mod():
+    mods=(await load_db())["mod_versions"]; return mods[-1] if mods else None
+async def get_all_mod_versions(): return list(reversed((await load_db())["mod_versions"]))
+async def save_mod_version(version_name,changelog,file_id,roles):
+    db=await load_db()
+    if any(m.get("version_name", "").casefold() == str(version_name).casefold() for m in db["mod_versions"]): return False
+    db["mod_versions"].append({"id":max([int(m.get("id",0)) for m in db["mod_versions"]],default=0)+1,"version_name":version_name,"changelog":changelog,"file_id":file_id,"allowed_roles":list(roles),"created_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S")}); await save_db(db); return True
+async def delete_mod_version(mod_id): db=await load_db(); db["mod_versions"]=[m for m in db["mod_versions"] if m.get("id")!=mod_id]; await save_db(db)
+async def export_table_to_txt(table_name):
+    filename = str(DB_PATH.parent / f"{sanitize_input(table_name,32)}.txt")
+    data = (await load_db()).get(table_name, {})
+    async with aiofiles.open(filename, "w", encoding="utf-8") as f:
+        await f.write(json.dumps(data, ensure_ascii=False, indent=2))
+    return filename
