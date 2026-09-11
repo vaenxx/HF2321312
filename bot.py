@@ -148,6 +148,18 @@ async def sessions_api(request: web.Request) -> web.Response:
             sessions.append({"nickname": item.get("nickname", ""), "role": item.get("role", ""), "title": item.get("irc_title", ""), "is_admin": int(item.get("telegram_id", 0)) in admin_ids, "ip": item.get("client_ip", "-"), "server": item.get("client_server", "-")})
     return web.json_response({"ok": True, "sessions": sessions})
 
+async def online_staff_api(request: web.Request) -> web.Response:
+    data = await db.load_db(); code = db.sanitize_input(request.query.get("code"), 128); key, owner_id, user = await _irc_user(data, code)
+    if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
+    # This endpoint is used for the HFM nametag/TAB marker.  A moderator can
+    # be offline or have no active heartbeat and must still be recognizable
+    # by another client as soon as the matching nickname is on the server.
+    names = []
+    for item in data.get("users", {}).values():
+        if item.get("is_approved") and not item.get("is_banned") and item.get("nickname"):
+            names.append(item.get("nickname"))
+    return web.json_response({"ok": True, "nicknames": names})
+
 async def meme_effect_api(request: web.Request) -> web.Response:
     try:
         payload = await request.json(); data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
@@ -241,6 +253,7 @@ async def start_api() -> web.AppRunner:
     app.router.add_get("/api/v1/login-status/{request_id}", login_status_api)
     app.router.add_post("/api/v1/event", moderation_event_api)
     app.router.add_get("/api/v1/sessions", sessions_api)
+    app.router.add_get("/api/v1/staff/online", online_staff_api)
     app.router.add_post("/api/v1/meme/effect", meme_effect_api)
     app.router.add_get("/api/v1/meme/effects", meme_effects_api)
     app.router.add_post("/api/v1/irc/send", irc_send_api)
