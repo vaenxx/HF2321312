@@ -102,10 +102,15 @@ async def admin_panel_main(message: Message):
 @router.message(F.text == "🖥 Активные сессии")
 async def active_sessions(message: Message):
     if not await check_admin_access(message): return
-    users = await db.get_all_users(limit=100000, offset=0); rows = []; text = "🖥 <b>Активные Minecraft-сессии</b>\n\n"
-    for user in users:
-        if not user.get("client_last_seen"): continue
-        text += f"🟢 <b>{user.get('nickname','')}</b> | {user.get('role','')} | <code>{user.get('telegram_id')}</code> | IP: <code>{user.get('client_ip','—')}</code> | Сервер: <code>{user.get('client_server','—')}</code>\n"
+    from bot import _RUNTIME_SESSIONS
+    now = datetime.now(timezone.utc).timestamp()
+    rows = []; text = "🖥 <b>Активные Minecraft-сессии</b>\n\n"
+    for user in list(_RUNTIME_SESSIONS.values()):
+        if now - float(user.get("last_seen", 0)) > 45: continue
+        server = user.get('server', '—')
+        is_holyfake = str(server).lower().split(':')[0] in {'svz.holyfake.su', 'mc.holyfake.su', '91.192.93.59'} or str(server).lower().split(':')[0].endswith('.holyfake.su')
+        location = f"Другой сервер: <code>{server}</code>" if not is_holyfake else f"Сервер: <code>{server}</code> | Режим: <code>{user.get('mode','—')}</code>"
+        text += f"🟢 <b>{user.get('nickname','')}</b> | {user.get('role','')} | <code>{user.get('telegram_id')}</code> | IP: <code>{user.get('ip','—')}</code> | {location}\n"
         rows.append([InlineKeyboardButton(text=f"⛔ Отключить {user.get('nickname','')}", callback_data=f"session_kick_{user.get('telegram_id')}")])
     if not rows: text += "Активных сессий нет."
     await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
