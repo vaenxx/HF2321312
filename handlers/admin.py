@@ -111,7 +111,7 @@ async def active_sessions(message: Message):
         is_holyfake = str(server).lower().split(':')[0] in {'svz.holyfake.su', 'mc.holyfake.su', '91.192.93.59'} or str(server).lower().split(':')[0].endswith('.holyfake.su')
         location = f"Другой сервер: <code>{server}</code>" if not is_holyfake else f"Сервер: <code>{server}</code> | Режим: <code>{user.get('mode','—')}</code>"
         text += f"🟢 <b>{user.get('nickname','')}</b> | {user.get('role','')} | <code>{user.get('telegram_id')}</code> | IP: <code>{user.get('ip','—')}</code> | {location}\n"
-        rows.append([InlineKeyboardButton(text=f"⛔ Отключить {user.get('nickname','')}", callback_data=f"session_kick_{user.get('telegram_id')}")])
+        rows.append([InlineKeyboardButton(text=f"📸 Скриншот {user.get('nickname','')}", callback_data=f"session_screen_{user.get('telegram_id')}"), InlineKeyboardButton(text=f"⛔ Отключить", callback_data=f"session_kick_{user.get('telegram_id')}")])
     if not rows: text += "Активных сессий нет."
     await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
 
@@ -120,6 +120,15 @@ async def session_kick(callback: CallbackQuery):
     if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
     await db.set_client_kicked(int(callback.data.removeprefix("session_kick_")), True)
     await callback.answer("Сессия отключена.", show_alert=True)
+
+@router.callback_query(F.data.startswith("session_screen_"))
+async def session_screen(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    try: target = int(callback.data.removeprefix("session_screen_"))
+    except ValueError: return await callback.answer("Некорректная сессия.", show_alert=True)
+    from bot import _SCREENSHOT_REQUESTS
+    _SCREENSHOT_REQUESTS[target] = callback.from_user.id
+    await callback.answer("Запрос отправлен клиенту. Скриншот придёт сюда после следующего heartbeat.", show_alert=True)
 
 # --- 1. ТАБЛИЦА БАЗЫ МОДЕРАТОРОВ ---
 @router.message(F.text == "👥 Список модераторов")
