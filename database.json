@@ -13,7 +13,7 @@
       "created_at": "2026-01-01 00:00:00",
       "key_code": "HF-246B09FF2BAAB6AA921F394A227A63893EC4",
       "days": 30,
-      "client_last_seen": "2026-09-11T21:58:38.057253+00:00",
+      "client_last_seen": "2026-09-12T16:36:26.291268+00:00",
       "modes": [
         "HolyWorld"
       ],
@@ -60,7 +60,7 @@
       "key_code": "HF-31D47D829A56",
       "created_at": "2026-09-11 07:51:32",
       "client_kicked": false,
-      "client_last_seen": "2026-09-11T08:36:22.114818+00:00",
+      "client_last_seen": "2026-09-12T13:53:25.088449+00:00",
       "client_ip": "94.156.131.235",
       "client_server": ""
     },
@@ -81,7 +81,7 @@
       "key_code": "HF-FF95DE9C7C86",
       "created_at": "2026-09-11 08:07:57",
       "client_kicked": false,
-      "client_last_seen": "2026-09-11T22:01:08.644314+00:00",
+      "client_last_seen": "2026-09-12T17:08:35.823614+00:00",
       "client_ip": "94.156.131.235",
       "client_server": ""
     },
@@ -89,7 +89,7 @@
       "telegram_id": 8205450482,
       "username": "",
       "nickname": "NeKodex",
-      "role": "HW: Ст.Сотрудник",
+      "role": "Админ",
       "mode": "HolyWorld",
       "modes": [
         "HolyWorld"
@@ -106,7 +106,7 @@
       "telegram_id": 8291334769,
       "username": "lunar_cl1ent",
       "nickname": "burbenalix",
-      "role": "HW: Мл. Сотрудник",
+      "role": "HW: Сотрудник",
       "mode": "HolyWorld",
       "modes": [
         "HolyWorld"
@@ -119,10 +119,31 @@
       "key_code": "HF-23E04F265E5E",
       "created_at": "2026-09-11 21:53:03",
       "client_kicked": false,
-      "client_last_seen": "2026-09-11T22:00:53.549687+00:00",
+      "client_last_seen": "2026-09-12T16:24:00.149889+00:00",
       "client_ip": "94.156.131.235",
-      "client_server": "mc.holyfake.su",
+      "client_server": "svz.holyfake.su",
       "irc_title": "&#BB5CFF/&#CC4DF2s&#DD3FE6p&#EE30D9e&#FF21CCc"
+    },
+    "8333242672": {
+      "telegram_id": 8333242672,
+      "username": "ksuha_pikmi",
+      "nickname": "monskiil",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "modes": [
+        "HolyWorld"
+      ],
+      "discord_id": "",
+      "discord_tag": "",
+      "is_approved": 1,
+      "is_banned": 0,
+      "days": 14,
+      "key_code": "HF-6F26528FB180",
+      "created_at": "2026-09-12 10:11:21",
+      "client_kicked": false,
+      "client_last_seen": "2026-09-12T17:08:34.803757+00:00",
+      "client_ip": "94.156.131.235",
+      "client_server": "svz.holyfake.su"
     }
   },
   "keys": {
@@ -209,6 +230,18 @@
       "created_at": "2026-09-11 21:52:09",
       "used_by": 8291334769,
       "used_at": "2026-09-11 21:53:03"
+    },
+    "HF-6F26528FB180": {
+      "key": "HF-6F26528FB180",
+      "key_code": "HF-6F26528FB180",
+      "target_nickname": "monskiil",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "days": 14,
+      "is_used": 1,
+      "created_at": "2026-09-12 10:10:31",
+      "used_by": 8333242672,
+      "used_at": "2026-09-12 10:11:21"
     }
   },
   "applications": [
