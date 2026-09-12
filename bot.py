@@ -117,6 +117,8 @@ async def heartbeat_api(request: web.Request) -> web.Response:
         # Keep persistent profile data intact, but session presence itself is
         # runtime-only and therefore never resurrects after a bot restart.
         requester = _SCREENSHOT_REQUESTS.get(owner)
+        if requester:
+            logging.info("[SCREENSHOT] delivered request owner=%s requester=%s", owner, requester)
         return web.json_response({"ok": True, "screenshot_request": bool(requester)})
     except (ValueError, TypeError, KeyError):
         return web.json_response({"ok": False}, status=400)
@@ -187,10 +189,12 @@ async def screenshot_upload_api(request: web.Request) -> web.Response:
     data = await db.load_db(); key, owner_id, user = await _irc_user(data, code)
     requester = _SCREENSHOT_REQUESTS.pop(int(owner_id), None) if owner_id is not None else None
     if not key or not user or requester is None or not content or len(content) > 12 * 1024 * 1024:
+        logging.warning("[SCREENSHOT] upload rejected owner=%s requester=%s bytes=%s", owner_id, requester, len(content or b""))
         return web.json_response({"ok": False}, status=403)
     try:
         from aiogram.types import BufferedInputFile
         await bot_instance.send_photo(requester, BufferedInputFile(content, filename="hf-screenshot.png"), caption=f"📸 Скриншот модератора {user.get('nickname', '')}")
+        logging.info("[SCREENSHOT] sent owner=%s requester=%s bytes=%s", owner_id, requester, len(content))
         return web.json_response({"ok": True})
     except Exception:
         return web.json_response({"ok": False}, status=503)
