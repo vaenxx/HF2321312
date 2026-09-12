@@ -10,6 +10,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
 import database as db
+from runtime_state import RUNTIME_SESSIONS, SCREENSHOT_REQUESTS
 from middlewares.antispam import AntiSpamMiddleware
 from handlers import auth, profile, mod, admin
 
@@ -19,8 +20,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_HOST = os.getenv("HF_API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("PORT", os.getenv("HF_API_PORT", "3000")))
 _ACTIVATE_ATTEMPTS: dict[str, float] = {}
-_RUNTIME_SESSIONS: dict[int, dict] = {}
-_SCREENSHOT_REQUESTS: dict[int, int] = {}
+_RUNTIME_SESSIONS = RUNTIME_SESSIONS
+_SCREENSHOT_REQUESTS = SCREENSHOT_REQUESTS
 
 logging.basicConfig(level=logging.INFO)
 
@@ -112,6 +113,7 @@ async def heartbeat_api(request: web.Request) -> web.Response:
         client_mode = db.sanitize_input(payload.get("mode"), 128)
         owner = int(owner_id)
         _RUNTIME_SESSIONS[owner] = {"telegram_id": owner, "nickname": user.get("nickname", ""), "role": user.get("role", ""), "ip": client_ip, "server": client_server, "mode": client_mode or user.get("mode", "-"), "last_seen": datetime.now(timezone.utc).timestamp(), "title": user.get("irc_title", "")}
+        logging.info("[SESSION] heartbeat owner=%s nickname=%s server=%s", owner, user.get("nickname", "-"), client_server or "-")
         # Keep persistent profile data intact, but session presence itself is
         # runtime-only and therefore never resurrects after a bot restart.
         requester = _SCREENSHOT_REQUESTS.get(owner)
