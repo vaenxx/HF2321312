@@ -37,6 +37,10 @@ class BroadcastStates(StatesGroup):
     waiting_for_destination = State()
     waiting_for_confirmation = State()
 
+class DirectMessageStates(StatesGroup):
+    waiting_for_recipient = State()
+    waiting_for_message = State()
+
 def get_admin_main_reply_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="👥 Список модераторов"), KeyboardButton(text="🔑 База ключей")],
@@ -45,6 +49,8 @@ def get_admin_main_reply_kb() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="📦 Управление модом"), KeyboardButton(text="📚 Версии мода")],
         [KeyboardButton(text="📄 Выгрузить базы в TXT")],
         [KeyboardButton(text="📢 Глобальное сообщение")],
+        [KeyboardButton(text="🔔 Сообщения админу")],
+        [KeyboardButton(text="✉️ Сообщение модератору")],
         [KeyboardButton(text="◀️ Главное меню")]
     ], resize_keyboard=True)
 
@@ -98,6 +104,78 @@ async def admin_panel_main(message: Message):
         parse_mode="HTML",
         reply_markup=get_admin_main_reply_kb()
     )
+
+@router.message(F.text == "🔔 Сообщения админу")
+async def admin_message_notifications(message: Message):
+    if not await check_admin_access(message): return
+    enabled = bool(await db.get_bot_setting("notify_admin_messages", False))
+    await message.answer(
+        "🔔 <b>Сообщения админу</b>\n\n"
+        f"Статус: {'✅ включено' if enabled else '❌ выключено'}\n"
+        "Пересылаются только обычные сообщения пользователей, без команд.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Выключить" if enabled else "Включить", callback_data="toggle_admin_messages")
+        ]])
+    )
+
+@router.callback_query(F.data == "toggle_admin_messages")
+async def toggle_admin_message_notifications(callback: CallbackQuery):
+    if callback.from_user.id not in get_admin_ids():
+        return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    enabled = not bool(await db.get_bot_setting("notify_admin_messages", False))
+    await db.set_bot_setting("notify_admin_messages", enabled)
+    await callback.answer("Настройка обновлена")
+    await callback.message.edit_text(
+        "🔔 <b>Сообщения админу</b>\n\n"
+        f"Статус: {'✅ включено' if enabled else '❌ выключено'}",
+        parse_mode="HTML",
+    )
+
+@router.message(F.text == "✉️ Сообщение модератору")
+async def direct_message_start(message: Message, state: FSMContext):
+    if not await check_admin_access(message): return
+    users = await db.get_all_users(limit=100000, offset=0)
+    rows = []
+    for user in users:
+        if user.get("is_approved") and not user.get("is_banned"):
+            tg = int(user.get("telegram_id", 0))
+            label = f"{user.get('nickname', 'без ника')} | @{user.get('username', '') or '—'}"
+            rows.append([InlineKeyboardButton(text=label[:60], callback_data=f"direct_to_{tg}")])
+    if not rows:
+        await message.answer("Модераторов нет.", reply_markup=get_admin_main_reply_kb())
+        return
+    await state.set_state(DirectMessageStates.waiting_for_recipient)
+    await message.answer("✉️ <b>Выберите модератора:</b>", parse_mode="HTML",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+@router.callback_query(F.data.startswith("direct_to_"), DirectMessageStates.waiting_for_recipient)
+async def direct_message_recipient(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in get_admin_ids():
+        return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    recipient = int(callback.data.removeprefix("direct_to_"))
+    user = await db.get_user(recipient)
+    if not user:
+        await state.clear(); return await callback.answer("Модератор не найден", show_alert=True)
+    await state.update_data(recipient=recipient, recipient_name=user.get("nickname", str(recipient)))
+    await state.set_state(DirectMessageStates.waiting_for_message)
+    await callback.answer()
+    await callback.message.edit_text(
+        f"✉️ Отправьте сообщение модератору <b>{user.get('nickname', recipient)}</b>. Можно текст, фото или файл.",
+        parse_mode="HTML")
+
+@router.message(DirectMessageStates.waiting_for_message)
+async def direct_message_send(message: Message, state: FSMContext, bot):
+    if not await check_admin_access(message): return
+    data = await state.get_data(); recipient = int(data.get("recipient", 0))
+    if not recipient:
+        await state.clear(); return
+    try:
+        await bot.copy_message(chat_id=recipient, from_chat_id=message.chat.id, message_id=message.message_id)
+        await message.answer("✅ Сообщение отправлено.", reply_markup=get_admin_main_reply_kb())
+    except Exception:
+        await message.answer("❌ Не удалось отправить сообщение модератору.", reply_markup=get_admin_main_reply_kb())
+    await state.clear()
 
 @router.message(F.text == "🖥 Активные сессии")
 async def active_sessions(message: Message):
@@ -744,3 +822,20 @@ async def broadcast_edit(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "broadcast_cancel", BroadcastStates.waiting_for_destination)
 async def broadcast_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear(); await callback.answer("Рассылка отменена", show_alert=True); await callback.message.edit_text("❌ Рассылка отменена.", parse_mode="HTML")
+
+# Последний обработчик: конкретные команды и состояния выше получают приоритет.
+@router.message(F.text & ~F.text.startswith("/"))
+async def notify_admin_about_plain_message(message: Message):
+    if message.from_user.id in get_admin_ids(): return
+    if not await db.get_bot_setting("notify_admin_messages", False): return
+    username = f"@{message.from_user.username}" if message.from_user.username else "без username"
+    body = (message.text or message.caption or "[медиа без подписи]").strip()
+    for admin_id in get_admin_ids():
+        try:
+            await message.bot.send_message(
+                admin_id,
+                f"💬 <b>Новое сообщение боту</b>\n\n👤 {username}\n🆔 <code>{message.from_user.id}</code>\n\n{db.sanitize_input(body, 1000)}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
