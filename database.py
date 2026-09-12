@@ -17,7 +17,7 @@ ALL_ROLES = ["HW: Стажер", "HW: Мл. Сотрудник", "HW: Сотру
              "FT: Стажер", "FT: Staff", "FT: Агент", "Зам Куратора", "Куратор", "Админ", "СтАдмин", "Владелец"]
 ALL_MODES = ["FunTime", "HolyWorld", "ReallyWorld"]
 
-def _default() -> dict[str, Any]: return {"users": {}, "keys": {}, "applications": [], "mod_versions": [], "stats": {}}
+def _default() -> dict[str, Any]: return {"users": {}, "keys": {}, "applications": [], "mod_versions": [], "stats": {}, "bot_settings": {"notify_admin_messages": False}}
 def sanitize_input(text: str | None, max_length: int = 100) -> str: return str(text or "").strip()[:max_length]
 def _normalize(data: dict | None) -> dict:
     out = _default(); out.update(data or {})
@@ -63,6 +63,15 @@ async def _write(data: dict) -> None:
 
 async def save_db(data: dict) -> None:
     async with _LOCK: await _write(data)
+
+async def get_bot_setting(name: str, default: Any = None) -> Any:
+    data = await load_db()
+    return data.get("bot_settings", {}).get(name, default)
+
+async def set_bot_setting(name: str, value: Any) -> None:
+    data = await load_db()
+    data.setdefault("bot_settings", {})[name] = value
+    await save_db(data)
 async def init_db() -> None:
     """Initialize persistent storage without destroying an existing database."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
