@@ -143,7 +143,27 @@
       "client_kicked": false,
       "client_last_seen": "2026-09-12T17:08:34.803757+00:00",
       "client_ip": "94.156.131.235",
-      "client_server": "svz.holyfake.su"
+      "client_server": "svz.holyfake.su",
+      "irc_title": "&#FF74CEш&#FD70B3и&#FC6D98п&#FA697Eу&#F86563ч&#F76248ᴋ&#F55E2Dᴀ"
+    },
+    "6169704860": {
+      "telegram_id": 6169704860,
+      "username": "kvant200",
+      "nickname": "okakamir",
+      "role": "HW: Сотрудник",
+      "mode": "HolyWorld",
+      "modes": [
+        "HolyWorld"
+      ],
+      "discord_id": "",
+      "discord_tag": "",
+      "is_approved": 1,
+      "is_banned": 0,
+      "days": 14,
+      "key_code": "HF-9119C3ECD1E7",
+      "created_at": "2026-09-12 19:40:44",
+      "client_kicked": false,
+      "irc_title": "&#FF74CEш&#FD70B3и&#FC6D98п&#FA697Eу&#F86563ч&#F76248ᴋ&#F55E2Dᴀ"
     }
   },
   "keys": {
@@ -242,6 +262,18 @@
       "created_at": "2026-09-12 10:10:31",
       "used_by": 8333242672,
       "used_at": "2026-09-12 10:11:21"
+    },
+    "HF-9119C3ECD1E7": {
+      "key": "HF-9119C3ECD1E7",
+      "key_code": "HF-9119C3ECD1E7",
+      "target_nickname": "okakamir",
+      "role": "HW: Сотрудник",
+      "mode": "HolyWorld",
+      "days": 14,
+      "is_used": 1,
+      "created_at": "2026-09-12 19:39:53",
+      "used_by": 6169704860,
+      "used_at": "2026-09-12 19:40:44"
     }
   },
   "applications": [
