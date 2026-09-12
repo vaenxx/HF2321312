@@ -102,10 +102,10 @@ async def admin_panel_main(message: Message):
 @router.message(F.text == "🖥 Активные сессии")
 async def active_sessions(message: Message):
     if not await check_admin_access(message): return
-    from bot import _RUNTIME_SESSIONS
+    from runtime_state import RUNTIME_SESSIONS
     now = datetime.now(timezone.utc).timestamp()
     rows = []; text = "🖥 <b>Активные Minecraft-сессии</b>\n\n"
-    for user in list(_RUNTIME_SESSIONS.values()):
+    for user in list(RUNTIME_SESSIONS.values()):
         if now - float(user.get("last_seen", 0)) > 45: continue
         server = user.get('server', '—')
         is_holyfake = str(server).lower().split(':')[0] in {'svz.holyfake.su', 'mc.holyfake.su', '91.192.93.59'} or str(server).lower().split(':')[0].endswith('.holyfake.su')
@@ -126,8 +126,8 @@ async def session_screen(callback: CallbackQuery):
     if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
     try: target = int(callback.data.removeprefix("session_screen_"))
     except ValueError: return await callback.answer("Некорректная сессия.", show_alert=True)
-    from bot import _SCREENSHOT_REQUESTS
-    _SCREENSHOT_REQUESTS[target] = callback.from_user.id
+    from runtime_state import SCREENSHOT_REQUESTS
+    SCREENSHOT_REQUESTS[target] = callback.from_user.id
     await callback.answer("Запрос отправлен клиенту. Скриншот придёт сюда после следующего heartbeat.", show_alert=True)
 
 # --- 1. ТАБЛИЦА БАЗЫ МОДЕРАТОРОВ ---
