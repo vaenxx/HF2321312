@@ -19,6 +19,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_HOST = os.getenv("HF_API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("PORT", os.getenv("HF_API_PORT", "3000")))
 _ACTIVATE_ATTEMPTS: dict[str, float] = {}
+_RUNTIME_SESSIONS: dict[int, dict] = {}
 
 logging.basicConfig(level=logging.INFO)
 
@@ -105,10 +106,13 @@ async def heartbeat_api(request: web.Request) -> web.Response:
             return web.json_response({"ok": False}, status=403)
         if minecraft_username and user.get("nickname", "").casefold() != minecraft_username.casefold():
             return web.json_response({"ok": False}, status=403)
-        user["client_last_seen"] = datetime.now(timezone.utc).isoformat()
-        user["client_ip"] = request.headers.get("X-Forwarded-For", request.remote or "unknown").split(",")[0].strip()
-        user["client_server"] = db.sanitize_input(payload.get("server"), 128)
-        await db.save_db(data)
+        client_ip = request.headers.get("X-Forwarded-For", request.remote or "unknown").split(",")[0].strip()
+        client_server = db.sanitize_input(payload.get("server"), 128)
+        client_mode = db.sanitize_input(payload.get("mode"), 128)
+        owner = int(owner_id)
+        _RUNTIME_SESSIONS[owner] = {"telegram_id": owner, "nickname": user.get("nickname", ""), "role": user.get("role", ""), "ip": client_ip, "server": client_server, "mode": client_mode or user.get("mode", "-"), "last_seen": datetime.now(timezone.utc).timestamp(), "title": user.get("irc_title", "")}
+        # Keep persistent profile data intact, but session presence itself is
+        # runtime-only and therefore never resurrects after a bot restart.
         return web.json_response({"ok": True})
     except (ValueError, TypeError, KeyError):
         return web.json_response({"ok": False}, status=400)
@@ -137,15 +141,13 @@ async def moderation_event_api(request: web.Request) -> web.Response:
 
 async def sessions_api(request: web.Request) -> web.Response:
     data = await db.load_db(); code = db.sanitize_input(request.query.get("code"), 128); key, owner_id, user = await _irc_user(data, code)
-    admin_ids = {int(item.strip()) for item in os.getenv("ADMIN_IDS", "").split(",") if item.strip().isdigit()}
-    if owner_id not in admin_ids: return web.json_response({"ok": False}, status=403)
-    now = datetime.now(timezone.utc); sessions = []
-    for item in data.get("users", {}).values():
-        try: active = (now - datetime.fromisoformat(item.get("client_last_seen", "")).replace(tzinfo=timezone.utc)).total_seconds() <= 45
-        except Exception: active = False
-        if active:
+    if not key or not user or not user.get("is_approved") or user.get("client_kicked"):
+        return web.json_response({"ok": False}, status=403)
+    now = datetime.now(timezone.utc).timestamp(); sessions = []
+    for item in list(_RUNTIME_SESSIONS.values()):
+        if now - float(item.get("last_seen", 0)) <= 45:
             admin_ids = {int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
-            sessions.append({"nickname": item.get("nickname", ""), "role": item.get("role", ""), "title": item.get("irc_title", ""), "is_admin": int(item.get("telegram_id", 0)) in admin_ids, "ip": item.get("client_ip", "-"), "server": item.get("client_server", "-")})
+            sessions.append({"nickname": item.get("nickname", ""), "role": item.get("role", ""), "title": item.get("title", ""), "is_admin": int(item.get("telegram_id", 0)) in admin_ids, "ip": item.get("ip", "-"), "server": item.get("server", "-"), "mode": item.get("mode", "-")})
     return web.json_response({"ok": True, "sessions": sessions})
 
 async def online_staff_api(request: web.Request) -> web.Response:
