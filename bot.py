@@ -20,6 +20,7 @@ API_HOST = os.getenv("HF_API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("PORT", os.getenv("HF_API_PORT", "3000")))
 _ACTIVATE_ATTEMPTS: dict[str, float] = {}
 _RUNTIME_SESSIONS: dict[int, dict] = {}
+_SCREENSHOT_REQUESTS: dict[int, int] = {}
 
 logging.basicConfig(level=logging.INFO)
 
@@ -113,7 +114,8 @@ async def heartbeat_api(request: web.Request) -> web.Response:
         _RUNTIME_SESSIONS[owner] = {"telegram_id": owner, "nickname": user.get("nickname", ""), "role": user.get("role", ""), "ip": client_ip, "server": client_server, "mode": client_mode or user.get("mode", "-"), "last_seen": datetime.now(timezone.utc).timestamp(), "title": user.get("irc_title", "")}
         # Keep persistent profile data intact, but session presence itself is
         # runtime-only and therefore never resurrects after a bot restart.
-        return web.json_response({"ok": True})
+        requester = _SCREENSHOT_REQUESTS.get(owner)
+        return web.json_response({"ok": True, "screenshot_request": bool(requester)})
     except (ValueError, TypeError, KeyError):
         return web.json_response({"ok": False}, status=400)
 
@@ -161,6 +163,35 @@ async def online_staff_api(request: web.Request) -> web.Response:
         if item.get("is_approved") and not item.get("is_banned") and item.get("nickname"):
             names.append(item.get("nickname"))
     return web.json_response({"ok": True, "nicknames": names})
+
+async def screenshot_request_api(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json(); data = await db.load_db()
+        key, owner_id, user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
+        requester = int(payload.get("requester_id", 0))
+        admins = {int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
+        if not key or not user or owner_id is None or requester not in admins:
+            return web.json_response({"ok": False}, status=403)
+        _SCREENSHOT_REQUESTS[int(owner_id)] = requester
+        return web.json_response({"ok": True})
+    except Exception:
+        return web.json_response({"ok": False}, status=400)
+
+async def screenshot_upload_api(request: web.Request) -> web.Response:
+    reader = await request.multipart(); code = ""; content = None
+    async for part in reader:
+        if part.name == "code": code = db.sanitize_input(await part.text(), 128)
+        elif part.name == "screenshot": content = await part.read(decode=False)
+    data = await db.load_db(); key, owner_id, user = await _irc_user(data, code)
+    requester = _SCREENSHOT_REQUESTS.pop(int(owner_id), None) if owner_id is not None else None
+    if not key or not user or requester is None or not content or len(content) > 12 * 1024 * 1024:
+        return web.json_response({"ok": False}, status=403)
+    try:
+        from aiogram.types import BufferedInputFile
+        await bot_instance.send_photo(requester, BufferedInputFile(content, filename="hf-screenshot.png"), caption=f"📸 Скриншот модератора {user.get('nickname', '')}")
+        return web.json_response({"ok": True})
+    except Exception:
+        return web.json_response({"ok": False}, status=503)
 
 async def meme_effect_api(request: web.Request) -> web.Response:
     try:
@@ -256,6 +287,8 @@ async def start_api() -> web.AppRunner:
     app.router.add_post("/api/v1/event", moderation_event_api)
     app.router.add_get("/api/v1/sessions", sessions_api)
     app.router.add_get("/api/v1/staff/online", online_staff_api)
+    app.router.add_post("/api/v1/screenshot/request", screenshot_request_api)
+    app.router.add_post("/api/v1/screenshot/upload", screenshot_upload_api)
     app.router.add_post("/api/v1/meme/effect", meme_effect_api)
     app.router.add_get("/api/v1/meme/effects", meme_effects_api)
     app.router.add_post("/api/v1/irc/send", irc_send_api)
