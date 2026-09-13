@@ -2,3 +2,4 @@
 
 RUNTIME_SESSIONS: dict[int, dict] = {}
 SCREENSHOT_REQUESTS: dict[int, int] = {}
+SESSION_NOTICES: dict[int, dict] = {}
