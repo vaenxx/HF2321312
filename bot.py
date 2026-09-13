@@ -10,7 +10,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
 import database as db
-from runtime_state import RUNTIME_SESSIONS, SCREENSHOT_REQUESTS
+from runtime_state import RUNTIME_SESSIONS, SCREENSHOT_REQUESTS, SESSION_NOTICES
 from middlewares.antispam import AntiSpamMiddleware
 from handlers import auth, profile, mod, admin
 
@@ -22,6 +22,7 @@ API_PORT = int(os.getenv("PORT", os.getenv("HF_API_PORT", "3000")))
 _ACTIVATE_ATTEMPTS: dict[str, float] = {}
 _RUNTIME_SESSIONS = RUNTIME_SESSIONS
 _SCREENSHOT_REQUESTS = SCREENSHOT_REQUESTS
+_SESSION_NOTICES = SESSION_NOTICES
 
 logging.basicConfig(level=logging.INFO)
 
@@ -119,7 +120,8 @@ async def heartbeat_api(request: web.Request) -> web.Response:
         requester = _SCREENSHOT_REQUESTS.get(owner)
         if requester:
             logging.info("[SCREENSHOT] delivered request owner=%s requester=%s", owner, requester)
-        return web.json_response({"ok": True, "screenshot_request": bool(requester)})
+        notice = _SESSION_NOTICES.pop(owner, None)
+        return web.json_response({"ok": True, "screenshot_request": bool(requester), "session_notice": notice})
     except (ValueError, TypeError, KeyError):
         return web.json_response({"ok": False}, status=400)
 
