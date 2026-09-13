@@ -41,6 +41,9 @@ class DirectMessageStates(StatesGroup):
     waiting_for_recipient = State()
     waiting_for_message = State()
 
+class SessionNoticeStates(StatesGroup):
+    waiting_for_notice = State()
+
 def get_admin_main_reply_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="👥 Список модераторов"), KeyboardButton(text="🔑 База ключей")],
@@ -172,10 +175,10 @@ async def direct_message_send(message: Message, state: FSMContext, bot):
         await state.clear(); return
     try:
         await bot.copy_message(chat_id=recipient, from_chat_id=message.chat.id, message_id=message.message_id)
-        await message.answer("✅ Сообщение отправлено.", reply_markup=get_admin_main_reply_kb())
+        await message.answer("✅ Сообщение отправлено. Диалог открыт, отправьте следующее сообщение или нажмите «❌ Отмена».")
     except Exception:
         await message.answer("❌ Не удалось отправить сообщение модератору.", reply_markup=get_admin_main_reply_kb())
-    await state.clear()
+    # Состояние сохраняется: следующие сообщения продолжают этот личный чат.
 
 @router.message(F.text == "🖥 Активные сессии")
 async def active_sessions(message: Message):
@@ -189,7 +192,7 @@ async def active_sessions(message: Message):
         is_holyfake = str(server).lower().split(':')[0] in {'svz.holyfake.su', 'mc.holyfake.su', '91.192.93.59'} or str(server).lower().split(':')[0].endswith('.holyfake.su')
         location = f"Другой сервер: <code>{server}</code>" if not is_holyfake else f"Сервер: <code>{server}</code> | Режим: <code>{user.get('mode','—')}</code>"
         text += f"🟢 <b>{user.get('nickname','')}</b> | {user.get('role','')} | <code>{user.get('telegram_id')}</code> | IP: <code>{user.get('ip','—')}</code> | {location}\n"
-        rows.append([InlineKeyboardButton(text=f"📸 Скриншот {user.get('nickname','')}", callback_data=f"session_screen_{user.get('telegram_id')}"), InlineKeyboardButton(text=f"⛔ Отключить", callback_data=f"session_kick_{user.get('telegram_id')}")])
+        rows.append([InlineKeyboardButton(text=f"📸 Скриншот {user.get('nickname','')}", callback_data=f"session_screen_{user.get('telegram_id')}"), InlineKeyboardButton(text="📣 Титр", callback_data=f"session_notice_{user.get('telegram_id')}"), InlineKeyboardButton(text="⛔ Отключить", callback_data=f"session_kick_{user.get('telegram_id')}")])
     if not rows: text += "Активных сессий нет."
     await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
 
@@ -207,6 +210,40 @@ async def session_screen(callback: CallbackQuery):
     from runtime_state import SCREENSHOT_REQUESTS
     SCREENSHOT_REQUESTS[target] = callback.from_user.id
     await callback.answer("Запрос отправлен клиенту. Скриншот придёт сюда после следующего heartbeat.", show_alert=True)
+
+@router.callback_query(F.data.startswith("session_notice_"))
+async def session_notice_start(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in get_admin_ids(): return await callback.answer("⛔ Нет доступа!", show_alert=True)
+    target = int(callback.data.removeprefix("session_notice_"))
+    await state.update_data(notice_target=target)
+    await state.set_state(SessionNoticeStates.waiting_for_notice)
+    await callback.answer()
+    await callback.message.answer(
+        "📣 Отправьте титр одной строкой:\n"
+        "<code>title | subtitle | #цвет | секунды | bold italic</code>\n\n"
+        "Цвета: #FF0000, #008DFF, #F100FF, #00FF26, #FF0091 и любой HEX. Стили можно оставить пустыми.",
+        parse_mode="HTML", reply_markup=get_cancel_reply_kb())
+
+@router.message(SessionNoticeStates.waiting_for_notice)
+async def session_notice_save(message: Message, state: FSMContext):
+    if not await check_admin_access(message): return
+    parts = [item.strip() for item in (message.text or "").split("|")]
+    if len(parts) < 4 or not parts[0] or not parts[1]:
+        await message.answer("❌ Формат: title | subtitle | #цвет | секунды | bold italic")
+        return
+    color = parts[2].upper()
+    if not (len(color) == 7 and color.startswith("#") and all(c in "0123456789ABCDEF" for c in color[1:])):
+        await message.answer("❌ Цвет должен быть в формате HEX, например #FF0000.")
+        return
+    try: duration = max(1, min(3600, int(parts[3])))
+    except ValueError:
+        await message.answer("❌ Длительность укажите числом секунд."); return
+    styles = (parts[4].lower().split() if len(parts) > 4 else [])
+    from runtime_state import SESSION_NOTICES
+    target = int((await state.get_data()).get("notice_target", 0))
+    SESSION_NOTICES[target] = {"title": db.sanitize_input(parts[0], 120), "subtitle": db.sanitize_input(parts[1], 240), "color": color, "duration": duration, "bold": "bold" in styles, "italic": "italic" in styles}
+    await state.clear()
+    await message.answer("✅ Сообщение поставлено в очередь для сессии.", reply_markup=get_admin_main_reply_kb())
 
 # --- 1. ТАБЛИЦА БАЗЫ МОДЕРАТОРОВ ---
 @router.message(F.text == "👥 Список модераторов")
