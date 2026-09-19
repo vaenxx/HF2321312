@@ -26,6 +26,23 @@ _SESSION_NOTICES = SESSION_NOTICES
 
 logging.basicConfig(level=logging.INFO)
 
+
+async def prepare_polling(bot: Bot) -> None:
+    """Make the bot state compatible with long polling.
+
+    Telegram does not allow ``getUpdates`` while a webhook is configured for
+    the same token. The bot is intentionally polling-based, so remove a stale
+    webhook before creating the dispatcher. Pending updates are preserved.
+    """
+    webhook = await bot.get_webhook_info()
+    if webhook.url:
+        logging.warning(
+            "Telegram webhook is active (%s); removing it before polling",
+            webhook.url,
+        )
+        await bot.delete_webhook(drop_pending_updates=False)
+        logging.info("Telegram webhook removed; long polling is ready")
+
 async def activate_api(request: web.Request) -> web.Response:
     """Validates only keys already activated in Telegram and returns the bound profile."""
     try:
@@ -329,6 +346,7 @@ async def main():
     bot = Bot(token=BOT_TOKEN)
     global bot_instance
     bot_instance = bot
+    await prepare_polling(bot)
     api_runner = await start_api()
     dp = Dispatcher(storage=MemoryStorage())
 
