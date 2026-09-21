@@ -130,7 +130,8 @@ async def heartbeat_api(request: web.Request) -> web.Response:
         client_server = db.sanitize_input(payload.get("server"), 128)
         client_mode = db.sanitize_input(payload.get("mode"), 128)
         owner = int(owner_id)
-        _RUNTIME_SESSIONS[owner] = {"telegram_id": owner, "nickname": user.get("nickname", ""), "role": user.get("role", ""), "ip": client_ip, "server": client_server, "mode": client_mode or user.get("mode", "-"), "last_seen": datetime.now(timezone.utc).timestamp(), "title": user.get("irc_title", "")}
+        previous = _RUNTIME_SESSIONS.get(owner, {})
+        _RUNTIME_SESSIONS[owner] = {"telegram_id": owner, "nickname": user.get("nickname", ""), "role": user.get("role", ""), "ip": client_ip, "server": client_server, "mode": client_mode or user.get("mode", "-"), "last_seen": datetime.now(timezone.utc).timestamp(), "title": user.get("irc_title", ""), "cosmetics": previous.get("cosmetics", [])}
         logging.info("[SESSION] heartbeat owner=%s nickname=%s server=%s", owner, user.get("nickname", "-"), client_server or "-")
         # Keep persistent profile data intact, but session presence itself is
         # runtime-only and therefore never resurrects after a bot restart.
@@ -235,6 +236,65 @@ async def meme_effects_api(request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "effects": effects})
     except Exception: return web.json_response({"ok": False}, status=400)
 
+async def cosmetics_state_api(request: web.Request) -> web.Response:
+    """Stores the equipped cosmetic indices for the current runtime session."""
+    try:
+        payload = await request.json()
+        data = await db.load_db()
+        key, owner_id, user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
+        if not key or owner_id is None or not user or not user.get("is_approved") or user.get("client_kicked"):
+            return web.json_response({"ok": False}, status=403)
+        # The authenticated profile is authoritative; never let a client
+        # advertise cosmetics under another moderator's nickname.
+        nickname = user.get("nickname", "")
+        server = db.sanitize_input(payload.get("server"), 128)
+        raw = payload.get("cosmetics", [])
+        cosmetics = []
+        if isinstance(raw, list):
+            for value in raw:
+                try:
+                    index = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= index <= 255 and index not in cosmetics:
+                    cosmetics.append(index)
+        session = _RUNTIME_SESSIONS.get(int(owner_id))
+        if session is None:
+            session = {"telegram_id": int(owner_id), "nickname": nickname or user.get("nickname", ""), "server": server}
+            _RUNTIME_SESSIONS[int(owner_id)] = session
+        session["cosmetics"] = cosmetics
+        if nickname:
+            session["nickname"] = nickname
+        if server:
+            session["server"] = server
+        session["last_seen"] = datetime.now(timezone.utc).timestamp()
+        return web.json_response({"ok": True})
+    except Exception:
+        return web.json_response({"ok": False}, status=400)
+
+async def cosmetics_states_api(request: web.Request) -> web.Response:
+    """Returns equipped cosmetics of approved moderators on the same server."""
+    try:
+        data = await db.load_db()
+        key, owner_id, user = await _irc_user(data, db.sanitize_input(request.query.get("code"), 128))
+        if not key or owner_id is None or not user or not user.get("is_approved") or user.get("client_kicked"):
+            return web.json_response({"ok": False}, status=403)
+        server = db.sanitize_input(request.query.get("server"), 128)
+        now = datetime.now(timezone.utc).timestamp()
+        states = []
+        for session in _RUNTIME_SESSIONS.values():
+            if now - float(session.get("last_seen", 0)) > 45:
+                continue
+            if server and session.get("server", "") != server:
+                continue
+            cosmetics = session.get("cosmetics", [])
+            if not isinstance(cosmetics, list):
+                cosmetics = []
+            states.append({"nickname": session.get("nickname", ""), "cosmetics": cosmetics})
+        return web.json_response({"ok": True, "states": states})
+    except Exception:
+        return web.json_response({"ok": False}, status=400)
+
 async def _irc_user(data: dict, code: str):
     key = data.get("keys", {}).get(code) or next((v for v in data.get("keys", {}).values() if v.get("key") == code or v.get("key_code") == code), None)
     owner_id = key.get("used_by") if key else None; user = data.get("users", {}).get(str(owner_id)) if owner_id else None
@@ -316,6 +376,8 @@ async def start_api() -> web.AppRunner:
     app.router.add_post("/api/v1/screenshot/upload", screenshot_upload_api)
     app.router.add_post("/api/v1/meme/effect", meme_effect_api)
     app.router.add_get("/api/v1/meme/effects", meme_effects_api)
+    app.router.add_post("/api/v1/cosmetics/state", cosmetics_state_api)
+    app.router.add_get("/api/v1/cosmetics/states", cosmetics_states_api)
     app.router.add_post("/api/v1/irc/send", irc_send_api)
     app.router.add_post("/api/v1/irc/mute", irc_mute_api)
     app.router.add_get("/api/v1/irc/poll", irc_poll_api)
