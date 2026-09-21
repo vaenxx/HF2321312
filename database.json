@@ -22,27 +22,6 @@
       "client_server": "svz.holyfake.su",
       "irc_title": "&#FF0000/&#EF0000b&#E00000a&#D00000n &#B00000a&#A10000l&#910000l"
     },
-    "1299148508": {
-      "telegram_id": 1299148508,
-      "username": "hezoky",
-      "nickname": "LunarGvard",
-      "role": "HW: Сотрудник",
-      "mode": "HolyWorld",
-      "modes": [
-        "HolyWorld"
-      ],
-      "discord_id": "",
-      "discord_tag": "",
-      "is_approved": 1,
-      "is_banned": 0,
-      "days": 14,
-      "key_code": "HF-EAF79FA26C04",
-      "created_at": "2026-09-11 07:51:10",
-      "client_kicked": false,
-      "client_last_seen": "2026-09-11T10:45:16.171851+00:00",
-      "client_ip": "94.156.131.235",
-      "client_server": "svz.holyfake.su"
-    },
     "8294178502": {
       "telegram_id": 8294178502,
       "username": "shampuh10",
@@ -64,27 +43,6 @@
       "client_ip": "94.156.131.235",
       "client_server": ""
     },
-    "8129325290": {
-      "telegram_id": 8129325290,
-      "username": "arbuzik690",
-      "nickname": "MerinGix3",
-      "role": "HW: Мл. Сотрудник",
-      "mode": "HolyWorld",
-      "modes": [
-        "HolyWorld"
-      ],
-      "discord_id": "",
-      "discord_tag": "",
-      "is_approved": 1,
-      "is_banned": 0,
-      "days": 14,
-      "key_code": "HF-FF95DE9C7C86",
-      "created_at": "2026-09-11 08:07:57",
-      "client_kicked": false,
-      "client_last_seen": "2026-09-12T17:08:35.823614+00:00",
-      "client_ip": "94.156.131.235",
-      "client_server": ""
-    },
     "8205450482": {
       "telegram_id": 8205450482,
       "username": "",
@@ -101,28 +59,6 @@
       "days": 14,
       "key_code": "HF-4C4A512F161A",
       "created_at": "2026-09-11 08:24:40"
-    },
-    "8291334769": {
-      "telegram_id": 8291334769,
-      "username": "lunar_cl1ent",
-      "nickname": "burbenalix",
-      "role": "HW: Сотрудник",
-      "mode": "HolyWorld",
-      "modes": [
-        "HolyWorld"
-      ],
-      "discord_id": "",
-      "discord_tag": "",
-      "is_approved": 1,
-      "is_banned": 0,
-      "days": 14,
-      "key_code": "HF-23E04F265E5E",
-      "created_at": "2026-09-11 21:53:03",
-      "client_kicked": false,
-      "client_last_seen": "2026-09-12T16:24:00.149889+00:00",
-      "client_ip": "94.156.131.235",
-      "client_server": "svz.holyfake.su",
-      "irc_title": "&#BB5CFF/&#CC4DF2s&#DD3FE6p&#EE30D9e&#FF21CCc"
     },
     "8333242672": {
       "telegram_id": 8333242672,
@@ -164,6 +100,42 @@
       "created_at": "2026-09-12 19:40:44",
       "client_kicked": false,
       "irc_title": "&#FF74CEш&#FD70B3и&#FC6D98п&#FA697Eу&#F86563ч&#F76248ᴋ&#F55E2Dᴀ"
+    },
+    "8129325290": {
+      "telegram_id": 8129325290,
+      "username": "arbuzik690",
+      "nickname": "K_O_S_M_O_S",
+      "role": "HW: Сотрудник",
+      "mode": "HolyWorld",
+      "modes": [
+        "HolyWorld"
+      ],
+      "discord_id": "",
+      "discord_tag": "",
+      "is_approved": 1,
+      "is_banned": 0,
+      "days": 14,
+      "key_code": "HF-C11821E7DA82",
+      "created_at": "2026-09-19 17:32:34",
+      "client_kicked": false
+    },
+    "183192172": {
+      "telegram_id": 183192172,
+      "username": "Waterlily7975",
+      "nickname": "MrSammy_staff",
+      "role": "HW: Сотрудник",
+      "mode": "HolyWorld",
+      "modes": [
+        "HolyWorld"
+      ],
+      "discord_id": "",
+      "discord_tag": "",
+      "is_approved": 1,
+      "is_banned": 0,
+      "days": 14,
+      "key_code": "HF-F952E4F48E44",
+      "created_at": "2026-09-20 09:56:44",
+      "client_kicked": false
     }
   },
   "keys": {
@@ -191,18 +163,6 @@
       "used_by": 5729802563,
       "used_at": "2026-09-10 17:03:17"
     },
-    "HF-EAF79FA26C04": {
-      "key": "HF-EAF79FA26C04",
-      "key_code": "HF-EAF79FA26C04",
-      "target_nickname": "LunarGvard",
-      "role": "Стажер",
-      "mode": "HolyWorld",
-      "days": 14,
-      "is_used": 1,
-      "created_at": "2026-09-11 07:50:40",
-      "used_by": 1299148508,
-      "used_at": "2026-09-11 07:51:10"
-    },
     "HF-31D47D829A56": {
       "key": "HF-31D47D829A56",
       "key_code": "HF-31D47D829A56",
@@ -215,18 +175,6 @@
       "used_by": 8294178502,
       "used_at": "2026-09-11 07:51:32"
     },
-    "HF-FF95DE9C7C86": {
-      "key": "HF-FF95DE9C7C86",
-      "key_code": "HF-FF95DE9C7C86",
-      "target_nickname": "MerinGix3",
-      "role": "Стажер",
-      "mode": "HolyWorld",
-      "days": 14,
-      "is_used": 1,
-      "created_at": "2026-09-11 08:07:17",
-      "used_by": 8129325290,
-      "used_at": "2026-09-11 08:07:57"
-    },
     "HF-4C4A512F161A": {
       "key": "HF-4C4A512F161A",
       "key_code": "HF-4C4A512F161A",
@@ -238,18 +186,6 @@
       "created_at": "2026-09-11 08:23:46",
       "used_by": 8205450482,
       "used_at": "2026-09-11 08:24:40"
-    },
-    "HF-23E04F265E5E": {
-      "key": "HF-23E04F265E5E",
-      "key_code": "HF-23E04F265E5E",
-      "target_nickname": "burbenalix",
-      "role": "Стажер",
-      "mode": "HolyWorld",
-      "days": 14,
-      "is_used": 1,
-      "created_at": "2026-09-11 21:52:09",
-      "used_by": 8291334769,
-      "used_at": "2026-09-11 21:53:03"
     },
     "HF-6F26528FB180": {
       "key": "HF-6F26528FB180",
@@ -274,6 +210,50 @@
       "created_at": "2026-09-12 19:39:53",
       "used_by": 6169704860,
       "used_at": "2026-09-12 19:40:44"
+    },
+    "HF-F83924C5BB96": {
+      "key": "HF-F83924C5BB96",
+      "key_code": "HF-F83924C5BB96",
+      "target_nickname": "MrSammy_staff",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "days": 14,
+      "is_used": 0,
+      "created_at": "2026-09-19 17:18:08"
+    },
+    "HF-C11821E7DA82": {
+      "key": "HF-C11821E7DA82",
+      "key_code": "HF-C11821E7DA82",
+      "target_nickname": "K_O_S_M_O_S",
+      "role": "HW: Сотрудник",
+      "mode": "HolyWorld",
+      "days": 14,
+      "is_used": 1,
+      "created_at": "2026-09-19 17:32:02",
+      "used_by": 8129325290,
+      "used_at": "2026-09-19 17:32:34"
+    },
+    "HF-F952E4F48E44": {
+      "key": "HF-F952E4F48E44",
+      "key_code": "HF-F952E4F48E44",
+      "target_nickname": "MrSammy_staff",
+      "role": "HW: Сотрудник",
+      "mode": "HolyWorld",
+      "days": 14,
+      "is_used": 1,
+      "created_at": "2026-09-20 09:41:09",
+      "used_by": 183192172,
+      "used_at": "2026-09-20 09:56:44"
+    },
+    "HF-5E7FF5E20899": {
+      "key": "HF-5E7FF5E20899",
+      "key_code": "HF-5E7FF5E20899",
+      "target_nickname": "kazah",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "days": 14,
+      "is_used": 0,
+      "created_at": "2026-09-20 12:27:25"
     }
   },
   "applications": [
