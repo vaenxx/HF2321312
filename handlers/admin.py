@@ -701,7 +701,7 @@ async def process_del_mod(message: Message):
 async def upload_mod_start(message: Message, state: FSMContext):
     if not await check_admin_access(message): return
 
-    await message.answer("📦 <b>Загрузка мода</b>\n\n📂 Отправьте файл <code>.jar</code> или <code>.zip</code> (до 50 МБ):", reply_markup=get_cancel_reply_kb(), parse_mode="HTML")
+    await message.answer("📦 <b>Загрузка мода</b>\n\n📂 Отправьте файл <code>.jar</code> или <code>.zip</code> (до 100 МБ):", reply_markup=get_cancel_reply_kb(), parse_mode="HTML")
     await state.set_state(ModUploadStates.waiting_for_file)
 
 @router.message(ModUploadStates.waiting_for_file, F.document)
@@ -713,8 +713,8 @@ async def upload_mod_file(message: Message, state: FSMContext):
         await message.answer("❌ <b>Разрешены только файлы .jar и .zip!</b>", parse_mode="HTML")
         return
         
-    if file_size > 50 * 1024 * 1024:
-        await message.answer("❌ <b>Размер файла не должен превышать 50 МБ.</b>", parse_mode="HTML")
+    if file_size > 100 * 1024 * 1024:
+        await message.answer("❌ <b>Размер файла не должен превышать 100 МБ.</b>", parse_mode="HTML")
         return
 
     await state.update_data(file_id=message.document.file_id)
