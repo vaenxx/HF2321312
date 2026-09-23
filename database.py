@@ -344,6 +344,7 @@ def is_valid_custom_irc_title(title: str) -> bool:
         return False
     visible_characters = 0
     index = 0
+    legacy_codes = set("0123456789abcdefklmnor")
     while index < len(title):
         if title.startswith("&#", index):
             if index + 8 >= len(title):
@@ -352,6 +353,9 @@ def is_valid_custom_irc_title(title: str) -> bool:
             if len(color) != 6 or any(character not in "0123456789abcdefABCDEF" for character in color):
                 return False
             index += 8
+            continue
+        if title[index] in "&§" and index + 1 < len(title) and title[index + 1].lower() in legacy_codes:
+            index += 2
             continue
         character = title[index]
         if ord(character) < 32 or character == "§":
