@@ -359,8 +359,14 @@ async def irc_titles_api(request: web.Request) -> web.Response:
             return web.json_response({"ok": True, "titles": db.IRC_TITLES, "selected": user.get("irc_title", "")})
         payload = await request.json(); title = db.sanitize_input(payload.get("title"), 500)
         if title.casefold() == "off":
-            await db.clear_irc_title(owner_id); return web.json_response({"ok": True})
-        if await db.set_irc_title(owner_id, title): return web.json_response({"ok": True, "title": title})
+            await db.clear_irc_title(owner_id)
+            session = _RUNTIME_SESSIONS.get(int(owner_id))
+            if session is not None: session["title"] = ""
+            return web.json_response({"ok": True})
+        if await db.set_irc_title(owner_id, title):
+            session = _RUNTIME_SESSIONS.get(int(owner_id))
+            if session is not None: session["title"] = title
+            return web.json_response({"ok": True, "title": title})
         return web.json_response({"ok": False, "error": "Титул не найден."}, status=400)
     except Exception: return web.json_response({"ok": False}, status=400)
 
