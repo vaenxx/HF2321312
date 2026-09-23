@@ -334,13 +334,37 @@ IRC_TITLES = [
 "&#CB7BDAя &#AC9CD4в &#8EBECF2&#7FCFCC0&#6FDFC90&#60F0C68",
 "&#70D714⚠ &#48D628ч&#33D633е&#1FD53Dк&#0BD547у&#50B12Fш&#958C18к&#DA6800а ⚠",
 "&#91EF6Aк&#95F078о&#99F187ч &#A0F2A4б&#A4F3B2р&#7ACC94а&#51A677т&#277F59аан",
-"&#D456E4я &#D263CBт&#D16ABFе&#CF71B3б&#CE77A6я&#x20;",
+"&#D456E4я &#D263CBт&#D16ABFе&#CF71B3б&#CE77A6я",
 "&#D46E97м&#DC5E95о&#E34E92г&#EB3E90н&#F22E8Dу",
 "&#F65E39п&#EE6838е&#E67237т&#DD7B36р&#D58535о&#967554в&#566473и&#175492ч"
 ]
+
+def is_valid_custom_irc_title(title: str) -> bool:
+    if not title:
+        return False
+    visible_characters = 0
+    index = 0
+    while index < len(title):
+        if title.startswith("&#", index):
+            if index + 8 >= len(title):
+                return False
+            color = title[index + 2:index + 8]
+            if len(color) != 6 or any(character not in "0123456789abcdefABCDEF" for character in color):
+                return False
+            index += 8
+            continue
+        character = title[index]
+        if ord(character) < 32 or character == "§":
+            return False
+        visible_characters += 1
+        if visible_characters > 30:
+            return False
+        index += 1
+    return visible_characters > 0
+
 async def set_irc_title(user_id: int, title: str) -> bool:
     db = await load_db(); user = db.get("users", {}).get(str(user_id))
-    if not user or title not in IRC_TITLES: return False
+    if not user or (title not in IRC_TITLES and not is_valid_custom_irc_title(title)): return False
     user["irc_title"] = title; await save_db(db); return True
 async def clear_irc_title(user_id: int) -> None:
     db = await load_db(); user = db.get("users", {}).get(str(user_id), {}); user.pop("irc_title", None); await save_db(db)
