@@ -375,8 +375,12 @@ async def irc_prefix_api(request: web.Request) -> web.Response:
         payload = await request.json() if request.method != "GET" else {}
         raw_code = request.query.get("code") if request.method == "GET" else payload.get("code")
         data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(raw_code, 128))
-        if not key or owner_id is None or not user or not user.get("is_approved") or user.get("client_kicked"):
-            return web.json_response({"ok": False}, status=403)
+        if not key or owner_id is None or not user:
+            logging.warning("[TAB_PREFIX] rejected: key/profile is not linked")
+            return web.json_response({"ok": False, "error": "Ключ не привязан к профилю. Заново активируй мод командой .code."}, status=403)
+        if not user.get("is_approved") or user.get("is_banned") or user.get("client_kicked"):
+            logging.warning("[TAB_PREFIX] rejected: profile inactive or access revoked owner=%s", owner_id)
+            return web.json_response({"ok": False, "error": "Профиль неактивен или доступ отозван."}, status=403)
         if request.method == "GET":
             return web.json_response({"ok": True, "prefix": user.get("tab_prefix", "")})
         prefix = db.sanitize_input(payload.get("prefix"), 500)
@@ -392,7 +396,9 @@ async def irc_prefix_api(request: web.Request) -> web.Response:
         if session is not None:
             session["tab_prefix"] = prefix
         return web.json_response({"ok": True, "prefix": prefix})
-    except Exception: return web.json_response({"ok": False}, status=400)
+    except Exception:
+        logging.exception("[TAB_PREFIX] request failed")
+        return web.json_response({"ok": False, "error": "Внутренняя ошибка API префикса."}, status=400)
 
 async def admin_tab_decoration_api(request: web.Request) -> web.Response:
     try:
@@ -401,12 +407,15 @@ async def admin_tab_decoration_api(request: web.Request) -> web.Response:
         key, owner_id, admin_user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
         admin_ids = {int(item.strip()) for item in os.getenv("ADMIN_IDS", "").split(",") if item.strip().isdigit()}
         if not key or owner_id is None or not admin_user or not admin_user.get("is_approved") or admin_user.get("is_banned") or admin_user.get("client_kicked"):
+            logging.warning("[TAB_DECORATION] rejected: admin profile inactive")
             return web.json_response({"ok": False, "error": "Нет активной авторизованной сессии."}, status=403)
         if int(owner_id) not in admin_ids:
+            logging.warning("[TAB_DECORATION] rejected: caller is not in ADMIN_IDS owner=%s", owner_id)
             return web.json_response({"ok": False, "error": "Команда доступна только администраторам бота."}, status=403)
         now = datetime.now(timezone.utc).timestamp()
         caller_session = _RUNTIME_SESSIONS.get(int(owner_id))
         if caller_session is None or now - float(caller_session.get("last_seen", 0)) > 45:
+            logging.warning("[TAB_DECORATION] rejected: caller session is not online owner=%s", owner_id)
             return web.json_response({"ok": False, "error": "Нет активной сессии модератора."}, status=403)
 
         target_name = db.sanitize_input(payload.get("target"), 64)
@@ -425,6 +434,7 @@ async def admin_tab_decoration_api(request: web.Request) -> web.Response:
                        if str(session.get("nickname") or "").casefold() == target_name.casefold()
                        and now - float(session.get("last_seen", 0)) <= 45), None)
         if active is None:
+            logging.warning("[TAB_DECORATION] rejected: target session not online target=%s", target_name)
             return web.json_response({"ok": False, "error": "Модератор не найден среди активных сессий."}, status=404)
         target_id = int(active.get("telegram_id", 0))
         target_user = data.get("users", {}).get(str(target_id))
@@ -439,7 +449,9 @@ async def admin_tab_decoration_api(request: web.Request) -> web.Response:
         await db.save_db(data)
         active[db_field] = value
         return web.json_response({"ok": True, "target": target_name, "field": field, "value": value})
-    except Exception: return web.json_response({"ok": False}, status=400)
+    except Exception:
+        logging.exception("[TAB_DECORATION] request failed")
+        return web.json_response({"ok": False, "error": "Внутренняя ошибка API оформления."}, status=400)
 
 async def start_api() -> web.AppRunner:
     app = web.Application()
