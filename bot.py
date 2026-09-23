@@ -131,7 +131,7 @@ async def heartbeat_api(request: web.Request) -> web.Response:
         client_mode = db.sanitize_input(payload.get("mode"), 128)
         owner = int(owner_id)
         previous = _RUNTIME_SESSIONS.get(owner, {})
-        _RUNTIME_SESSIONS[owner] = {"telegram_id": owner, "nickname": user.get("nickname", ""), "role": user.get("role", ""), "ip": client_ip, "server": client_server, "mode": client_mode or user.get("mode", "-"), "last_seen": datetime.now(timezone.utc).timestamp(), "title": user.get("irc_title", ""), "cosmetics": previous.get("cosmetics", [])}
+        _RUNTIME_SESSIONS[owner] = {"telegram_id": owner, "nickname": user.get("nickname", ""), "role": user.get("role", ""), "ip": client_ip, "server": client_server, "mode": client_mode or user.get("mode", "-"), "last_seen": datetime.now(timezone.utc).timestamp(), "title": user.get("irc_title", ""), "tab_prefix": user.get("tab_prefix", ""), "tab_suffix": user.get("tab_suffix", ""), "cosmetics": previous.get("cosmetics", [])}
         logging.info("[SESSION] heartbeat owner=%s nickname=%s server=%s", owner, user.get("nickname", "-"), client_server or "-")
         # Keep persistent profile data intact, but session presence itself is
         # runtime-only and therefore never resurrects after a bot restart.
@@ -170,10 +170,10 @@ async def sessions_api(request: web.Request) -> web.Response:
     if not key or not user or not user.get("is_approved") or user.get("client_kicked"):
         return web.json_response({"ok": False}, status=403)
     now = datetime.now(timezone.utc).timestamp(); sessions = []
+    admin_ids = {int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
     for item in list(_RUNTIME_SESSIONS.values()):
         if now - float(item.get("last_seen", 0)) <= 45:
-            admin_ids = {int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
-            sessions.append({"nickname": item.get("nickname", ""), "role": item.get("role", ""), "title": item.get("title", ""), "is_admin": int(item.get("telegram_id", 0)) in admin_ids, "ip": item.get("ip", "-"), "server": item.get("server", "-"), "mode": item.get("mode", "-")})
+            sessions.append({"nickname": item.get("nickname", ""), "role": item.get("role", ""), "title": item.get("title", ""), "tab_prefix": item.get("tab_prefix", ""), "tab_suffix": item.get("tab_suffix", ""), "is_admin": int(item.get("telegram_id", 0)) in admin_ids, "ip": item.get("ip", "-"), "server": item.get("server", "-"), "mode": item.get("mode", "-")})
     return web.json_response({"ok": True, "sessions": sessions})
 
 async def online_staff_api(request: web.Request) -> web.Response:
@@ -370,6 +370,77 @@ async def irc_titles_api(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": "Титул не найден."}, status=400)
     except Exception: return web.json_response({"ok": False}, status=400)
 
+async def irc_prefix_api(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json() if request.method != "GET" else {}
+        raw_code = request.query.get("code") if request.method == "GET" else payload.get("code")
+        data = await db.load_db(); key, owner_id, user = await _irc_user(data, db.sanitize_input(raw_code, 128))
+        if not key or owner_id is None or not user or not user.get("is_approved") or user.get("client_kicked"):
+            return web.json_response({"ok": False}, status=403)
+        if request.method == "GET":
+            return web.json_response({"ok": True, "prefix": user.get("tab_prefix", "")})
+        prefix = db.sanitize_input(payload.get("prefix"), 500)
+        if prefix.casefold() == "off":
+            user.pop("tab_prefix", None)
+            prefix = ""
+        elif not db.is_valid_custom_irc_title(prefix):
+            return web.json_response({"ok": False, "error": "Некорректный префикс или превышен лимит 30 символов."}, status=400)
+        else:
+            user["tab_prefix"] = prefix
+        await db.save_db(data)
+        session = _RUNTIME_SESSIONS.get(int(owner_id))
+        if session is not None:
+            session["tab_prefix"] = prefix
+        return web.json_response({"ok": True, "prefix": prefix})
+    except Exception: return web.json_response({"ok": False}, status=400)
+
+async def admin_tab_decoration_api(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json()
+        data = await db.load_db()
+        key, owner_id, admin_user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
+        admin_ids = {int(item.strip()) for item in os.getenv("ADMIN_IDS", "").split(",") if item.strip().isdigit()}
+        if not key or owner_id is None or not admin_user or not admin_user.get("is_approved") or admin_user.get("is_banned") or admin_user.get("client_kicked"):
+            return web.json_response({"ok": False, "error": "Нет активной авторизованной сессии."}, status=403)
+        if int(owner_id) not in admin_ids:
+            return web.json_response({"ok": False, "error": "Команда доступна только администраторам бота."}, status=403)
+        now = datetime.now(timezone.utc).timestamp()
+        caller_session = _RUNTIME_SESSIONS.get(int(owner_id))
+        if caller_session is None or now - float(caller_session.get("last_seen", 0)) > 45:
+            return web.json_response({"ok": False, "error": "Нет активной сессии модератора."}, status=403)
+
+        target_name = db.sanitize_input(payload.get("target"), 64)
+        if not target_name:
+            return web.json_response({"ok": False, "error": "Укажи ник активного модератора."}, status=400)
+        field = db.sanitize_input(payload.get("field"), 16).casefold()
+        value = db.sanitize_input(payload.get("value"), 500)
+        if field not in {"prefix", "suffix"}:
+            return web.json_response({"ok": False, "error": "Неизвестный тип оформления."}, status=400)
+        if value.casefold() == "off":
+            value = ""
+        elif not db.is_valid_custom_irc_title(value):
+            return web.json_response({"ok": False, "error": "Некорректный текст или превышен лимит 30 символов."}, status=400)
+
+        active = next((session for session in _RUNTIME_SESSIONS.values()
+                       if str(session.get("nickname") or "").casefold() == target_name.casefold()
+                       and now - float(session.get("last_seen", 0)) <= 45), None)
+        if active is None:
+            return web.json_response({"ok": False, "error": "Модератор не найден среди активных сессий."}, status=404)
+        target_id = int(active.get("telegram_id", 0))
+        target_user = data.get("users", {}).get(str(target_id))
+        if not target_user or not target_user.get("is_approved") or target_user.get("is_banned") or target_user.get("client_kicked"):
+            return web.json_response({"ok": False, "error": "Профиль модератора неактивен."}, status=404)
+
+        db_field = "tab_prefix" if field == "prefix" else "tab_suffix"
+        if value:
+            target_user[db_field] = value
+        else:
+            target_user.pop(db_field, None)
+        await db.save_db(data)
+        active[db_field] = value
+        return web.json_response({"ok": True, "target": target_name, "field": field, "value": value})
+    except Exception: return web.json_response({"ok": False}, status=400)
+
 async def start_api() -> web.AppRunner:
     app = web.Application()
     app.router.add_post("/api/v1/activate", activate_api)
@@ -389,6 +460,9 @@ async def start_api() -> web.AppRunner:
     app.router.add_get("/api/v1/irc/poll", irc_poll_api)
     app.router.add_get("/api/v1/irc/titles", irc_titles_api)
     app.router.add_post("/api/v1/irc/titles", irc_titles_api)
+    app.router.add_get("/api/v1/irc/prefix", irc_prefix_api)
+    app.router.add_post("/api/v1/irc/prefix", irc_prefix_api)
+    app.router.add_post("/api/v1/admin/tab-decoration", admin_tab_decoration_api)
     runner = web.AppRunner(app)
     await runner.setup()
     try:
