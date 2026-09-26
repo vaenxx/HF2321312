@@ -9,7 +9,11 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 _DATA_DIR = os.getenv("DATA_DIR", "").strip()
-DB_PATH = (Path(_DATA_DIR) / "database.json") if _DATA_DIR else (Path(__file__).resolve().parent / "database.json")
+_BOT_DIR = Path(__file__).resolve().parent
+_DATA_PATH = Path(_DATA_DIR).expanduser() if _DATA_DIR else _BOT_DIR
+if not _DATA_PATH.is_absolute():
+    _DATA_PATH = _BOT_DIR / _DATA_PATH
+DB_PATH = _DATA_PATH / "database.json"
 SOURCE_DB_PATH = Path(__file__).resolve().parent / "database.json"
 _LOCK = asyncio.Lock()
 ADMIN_ROLES = []
@@ -23,7 +27,14 @@ def _normalize(data: dict | None) -> dict:
     out = _default(); out.update(data or {})
     for k, v in _default().items():
         if not isinstance(out.get(k), type(v)): out[k] = v.copy() if isinstance(v, dict) else []
-    for code, key in out["keys"].items(): key.setdefault("key_code", code); key.setdefault("days", 30); key.setdefault("is_used", 0)
+    for code, key in out["keys"].items():
+        if not isinstance(key, dict):
+            out["keys"][code] = key = {"key": str(code)}
+        key.setdefault("key", code)
+        key.setdefault("key_code", code)
+        key.setdefault("days", 30)
+        key.setdefault("is_used", 0)
+        key.setdefault("is_active", 1)
     for user in out["users"].values():
         user.setdefault("modes", [user.get("mode", "HolyWorld")])
     # Migrate keys activated by older bot versions: bind them to the unique
@@ -108,13 +119,48 @@ async def auto_reload_db_task(interval: int = 10) -> None:
     while True:
         await asyncio.sleep(interval)
 
+def _canonical_key(code: str | None) -> str:
+    clean = sanitize_input(code, 128).translate(str.maketrans({"‐": "-", "‑": "-", "‒": "-", "–": "-", "—": "-", "−": "-"}))
+    clean = "".join(clean.split()).replace("\u200b", "").replace("\u200c", "").replace("\u200d", "").replace("\ufeff", "")
+    return clean.upper()
+
+
+def _enabled(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().casefold() in {"1", "true", "yes", "on", "active", "enabled"}
+    return bool(value)
+
+
+def is_key_active(key: dict | None) -> bool:
+    if not isinstance(key, dict):
+        return False
+    status = str(key.get("status", "")).strip().casefold()
+    return (
+        _enabled(key.get("is_active"), default=True)
+        and not _enabled(key.get("revoked"))
+        and not _enabled(key.get("disabled"))
+        and status not in {"revoked", "disabled", "inactive", "expired"}
+    )
+
+
+def is_key_used(key: dict | None) -> bool:
+    return isinstance(key, dict) and _enabled(key.get("is_used"))
+
+
 def _find_key(db: dict, code: str):
-    clean = sanitize_input(code, 128)
+    clean = _canonical_key(code)
+    if not clean:
+        return None, None
     direct = db["keys"].get(clean)
     if direct is not None:
         return clean, direct
     for stored_code, value in db["keys"].items():
-        if value.get("key") == clean or value.get("key_code") == clean:
+        if not isinstance(value, dict):
+            continue
+        candidates = (stored_code, value.get("key"), value.get("key_code"))
+        if any(_canonical_key(candidate) == clean for candidate in candidates):
             return stored_code, value
     return None, None
 
@@ -126,20 +172,32 @@ async def redeem_key(code: str, telegram_id: int) -> dict | None:
         logging.info("[AUDIT] redeem_key found=%s stored_id=%s is_used=%s used_by=%s requester=%s",
                      bool(key), stored_code or "-", key.get("is_used") if key else "-",
                      key.get("used_by") if key else "-", telegram_id)
-        if not key: return None
-        if key.get("is_used"):
+        if not key or not is_key_active(key):
+            return None
+        if is_key_used(key):
             # Повторный вход разрешен только тому Telegram-пользователю,
             # который уже активировал этот ключ ранее.
             owner_match = key.get("used_by") == telegram_id
             if not owner_match:
                 profile = db.get("users", {}).get(str(telegram_id), {})
-                entered = sanitize_input(code, 128)
-                owner_match = profile.get("key_code") in {entered, stored_code, key.get("key"), key.get("key_code")}
+                profile_code = _canonical_key(profile.get("key_code"))
+                owner_match = profile_code == _canonical_key(stored_code)
                 if owner_match:
                     key["used_by"] = telegram_id
                     await _write(db)
-            return dict(key) if owner_match else None
-        key["is_used"], key["used_by"] = 1, telegram_id; key["used_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S"); await _write(db); return dict(key)
+            if not owner_match:
+                return None
+            result = dict(key)
+            result["_stored_code"] = stored_code
+            result["_returning_owner"] = True
+            return result
+        key["is_used"], key["used_by"] = 1, telegram_id
+        key["used_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        await _write(db)
+        result = dict(key)
+        result["_stored_code"] = stored_code
+        result["_returning_owner"] = False
+        return result
 async def mark_key_used(code: str) -> None:
     db = await load_db();
     if code in db["keys"]: db["keys"][code]["is_used"] = 1; await save_db(db)
@@ -147,10 +205,13 @@ async def mark_key_used(code: str) -> None:
 async def reset_key_binding(code: str) -> bool:
     """Сбрасывает владельца ключа и делает его снова доступным для активации."""
     db = await load_db()
-    key = db["keys"].get(code)
+    stored_code, key = _find_key(db, code)
     if not key:
         return False
     key["is_used"] = 0
+    key["is_active"] = 1
+    key.pop("revoked", None)
+    key.pop("disabled", None)
     key.pop("used_by", None)
     key.pop("used_at", None)
     await save_db(db)
@@ -162,7 +223,21 @@ async def get_all_keys(limit=15, offset=0):
 async def find_key_by_prefix(prefix): return next((k for k in (await load_db())["keys"] if k.startswith(prefix)), None)
 async def delete_key(code): db=await load_db(); db["keys"].pop(code, None); await save_db(db)
 async def create_key(target_nickname, role, mode, days):
-    db=await load_db(); code=f"HF-{uuid.uuid4().hex[:12].upper()}"; db["keys"][code]={"key":code,"key_code":code,"target_nickname":sanitize_input(target_nickname,32),"role":role,"mode":mode,"days":max(1,int(days)),"is_used":0,"created_at":datetime.now().strftime("%Y-%m-%d %H:%M:%S")}; await save_db(db); return code
+    db = await load_db()
+    code = f"HF-{uuid.uuid4().hex[:12].upper()}"
+    db["keys"][code] = {
+        "key": code,
+        "key_code": code,
+        "target_nickname": sanitize_input(target_nickname, 32),
+        "role": role,
+        "mode": mode,
+        "days": max(1, int(days)),
+        "is_used": 0,
+        "is_active": 1,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    await save_db(db)
+    return code
 
 async def get_user(tg): return (await load_db())["users"].get(str(tg))
 async def get_all_users(limit=15, offset=0): return list((await load_db())["users"].values())[offset:offset+limit]
@@ -188,7 +263,9 @@ async def extend_user_key(tg: int, days: int) -> bool:
     if not user or not user.get("key_code"): return False
     code, key = _find_key(db, user["key_code"])
     if not key: return False
-    key["days"] = int(days); key["is_used"] = 1; key["is_active"] = 1; user["days"] = int(days)
+    key["days"] = int(days); key["is_used"] = 1; key["is_active"] = 1
+    key.pop("revoked", None); key.pop("disabled", None)
+    user["days"] = int(days)
     await save_db(db); return True
 
 async def deactivate_user_key(tg: int) -> bool:
