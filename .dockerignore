@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+database.json.bak
+bot_database.db
+cosmetics_bundle/
+miniapp/
+__pycache__/
+**/__pycache__/
+*.py[cod]
