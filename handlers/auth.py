@@ -106,7 +106,8 @@ async def process_key(message: Message, state: FSMContext, bot):
         await message.answer("❌ <b>Ошибка!</b> Недействительный или уже использованный ключ.", parse_mode="HTML")
         return
 
-    returning_owner = bool(key_data.get("is_used") and key_data.get("used_by") == message.from_user.id)
+    returning_owner = bool(key_data.get("_returning_owner"))
+    stored_code = key_data.get("_stored_code", key_code)
     await db.create_user(
         telegram_id=message.from_user.id,
         username=message.from_user.username or "",
@@ -115,7 +116,7 @@ async def process_key(message: Message, state: FSMContext, bot):
         mode=key_data["mode"],
         is_approved=1 if returning_owner else 0,
         days=key_data.get("days", 30),
-        key_code=key_code,
+        key_code=stored_code,
     )
     if returning_owner:
         logging.info("[AUDIT] key_login_success user_id=%s nickname=%s role=%s", message.from_user.id, key_data.get("target_nickname", "-"), key_data.get("role", "-"))
