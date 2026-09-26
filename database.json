@@ -101,24 +101,6 @@
       "client_kicked": false,
       "irc_title": "&#FF74CEш&#FD70B3и&#FC6D98п&#FA697Eу&#F86563ч&#F76248ᴋ&#F55E2Dᴀ"
     },
-    "8129325290": {
-      "telegram_id": 8129325290,
-      "username": "arbuzik690",
-      "nickname": "K_O_S_M_O_S",
-      "role": "HW: Сотрудник",
-      "mode": "HolyWorld",
-      "modes": [
-        "HolyWorld"
-      ],
-      "discord_id": "",
-      "discord_tag": "",
-      "is_approved": 1,
-      "is_banned": 0,
-      "days": 14,
-      "key_code": "HF-C11821E7DA82",
-      "created_at": "2026-09-19 17:32:34",
-      "client_kicked": false
-    },
     "183192172": {
       "telegram_id": 183192172,
       "username": "Waterlily7975",
@@ -135,6 +117,61 @@
       "days": 14,
       "key_code": "HF-F952E4F48E44",
       "created_at": "2026-09-20 09:56:44",
+      "client_kicked": false
+    },
+    "7737484490": {
+      "telegram_id": 7737484490,
+      "username": "iv0sk",
+      "nickname": "kazah",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "modes": [
+        "HolyWorld"
+      ],
+      "discord_id": "",
+      "discord_tag": "",
+      "is_approved": 1,
+      "is_banned": 0,
+      "days": 14,
+      "key_code": "HF-5E7FF5E20899",
+      "created_at": "2026-09-24 14:19:21",
+      "client_kicked": false,
+      "irc_title": "&#BDF1BEя &#CAE69Aв &#D7DC76п&#DDD665о&#E4D153л&#EACC41и&#F1C62Fн&#F7C11Dе"
+    },
+    "5709715271": {
+      "telegram_id": 5709715271,
+      "username": "lamqweri",
+      "nickname": "Polinka_43662372",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "modes": [
+        "HolyWorld"
+      ],
+      "discord_id": "",
+      "discord_tag": "",
+      "is_approved": 1,
+      "is_banned": 0,
+      "days": 31,
+      "key_code": "HF-DF09D59827F8",
+      "created_at": "2026-09-24 17:54:42",
+      "client_kicked": false
+    },
+    "6230919203": {
+      "telegram_id": 6230919203,
+      "username": "TeRsalI",
+      "nickname": "L01t_",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "modes": [
+        "HolyWorld"
+      ],
+      "discord_id": "",
+      "discord_tag": "",
+      "is_approved": 1,
+      "is_banned": 0,
+      "days": 14,
+      "key_code": "HF-3D5542E2284D",
+      "created_at": "2026-09-24 18:26:03",
       "client_kicked": false
     }
   },
@@ -221,18 +258,6 @@
       "is_used": 0,
       "created_at": "2026-09-19 17:18:08"
     },
-    "HF-C11821E7DA82": {
-      "key": "HF-C11821E7DA82",
-      "key_code": "HF-C11821E7DA82",
-      "target_nickname": "K_O_S_M_O_S",
-      "role": "HW: Сотрудник",
-      "mode": "HolyWorld",
-      "days": 14,
-      "is_used": 1,
-      "created_at": "2026-09-19 17:32:02",
-      "used_by": 8129325290,
-      "used_at": "2026-09-19 17:32:34"
-    },
     "HF-F952E4F48E44": {
       "key": "HF-F952E4F48E44",
       "key_code": "HF-F952E4F48E44",
@@ -252,8 +277,76 @@
       "role": "HW: Мл. Сотрудник",
       "mode": "HolyWorld",
       "days": 14,
+      "is_used": 1,
+      "created_at": "2026-09-20 12:27:25",
+      "used_by": 7737484490,
+      "used_at": "2026-09-24 14:19:21"
+    },
+    "HF-AB41CB7A824C": {
+      "key": "HF-AB41CB7A824C",
+      "key_code": "HF-AB41CB7A824C",
+      "target_nickname": "Polinka_43662372",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "days": 14,
       "is_used": 0,
-      "created_at": "2026-09-20 12:27:25"
+      "created_at": "2026-09-24 16:37:06"
+    },
+    "HF-DF09D59827F8": {
+      "key": "HF-DF09D59827F8",
+      "key_code": "HF-DF09D59827F8",
+      "target_nickname": "Polinka_43662372",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "days": 31,
+      "is_used": 1,
+      "created_at": "2026-09-24 17:50:17",
+      "used_by": 5709715271,
+      "used_at": "2026-09-24 17:54:42"
+    },
+    "HF-58CDBB611476": {
+      "key": "HF-58CDBB611476",
+      "key_code": "HF-58CDBB611476",
+      "target_nickname": "kruAsAN4ik1111",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "days": 14,
+      "is_used": 0,
+      "created_at": "2026-09-24 17:52:44"
+    },
+    "HF-3D5542E2284D": {
+      "key": "HF-3D5542E2284D",
+      "key_code": "HF-3D5542E2284D",
+      "target_nickname": "L01t_",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "days": 14,
+      "is_used": 1,
+      "created_at": "2026-09-24 18:25:51",
+      "used_by": 6230919203,
+      "used_at": "2026-09-24 18:26:03"
+    },
+    "HF-720C658DA585": {
+      "key": "HF-720C658DA585",
+      "key_code": "HF-720C658DA585",
+      "target_nickname": "kruAsAN4ik1111",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "days": 14,
+      "is_used": 1,
+      "created_at": "2026-09-25 20:19:07",
+      "used_by": 5299060686,
+      "used_at": "2026-09-25 20:20:32"
+    },
+    "HF-CD112D08ED5B": {
+      "key": "HF-CD112D08ED5B",
+      "key_code": "HF-CD112D08ED5B",
+      "target_nickname": "kruAsAN4ik1111",
+      "role": "HW: Мл. Сотрудник",
+      "mode": "HolyWorld",
+      "days": 1,
+      "is_used": 0,
+      "created_at": "2026-09-26 18:03:30"
     }
   },
   "applications": [
@@ -262,6 +355,13 @@
       "user_id": 5729802563,
       "type": "entry_request",
       "comment": "",
+      "status": "approved"
+    },
+    {
+      "id": 2,
+      "user_id": 5299060686,
+      "type": "key_request",
+      "comment": "Давай совесть делай ключик",
       "status": "approved"
     }
   ],
