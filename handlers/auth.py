@@ -103,7 +103,7 @@ async def process_key(message: Message, state: FSMContext, bot):
 
     if not key_data:
         logging.warning("[AUDIT] key_rejected user_id=%s username=%s", message.from_user.id, message.from_user.username or "-")
-        await message.answer("❌ <b>Ошибка!</b> Недействительный или уже использованный ключ.", parse_mode="HTML")
+        await message.answer("❌ <b>Ошибка!</b> Ключ недействителен, отключён или привязан к другому аккаунту.", parse_mode="HTML")
         return
 
     returning_owner = bool(key_data.get("_returning_owner"))
