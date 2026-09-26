@@ -177,16 +177,15 @@ async def redeem_key(code: str, telegram_id: int) -> dict | None:
         if is_key_used(key):
             # Повторный вход разрешен только тому Telegram-пользователю,
             # который уже активировал этот ключ ранее.
-            owner_match = key.get("used_by") == telegram_id
-            if not owner_match:
-                profile = db.get("users", {}).get(str(telegram_id), {})
-                profile_code = _canonical_key(profile.get("key_code"))
-                owner_match = profile_code == _canonical_key(stored_code)
-                if owner_match:
-                    key["used_by"] = telegram_id
-                    await _write(db)
-            if not owner_match:
+            profile = db.get("users", {}).get(str(telegram_id), {})
+            profile_code = _canonical_key(profile.get("key_code"))
+            profile_match = profile_code == _canonical_key(stored_code)
+            owner_match = key.get("used_by") == telegram_id or profile_match
+            if not owner_match or not profile_match or not _enabled(profile.get("is_approved")) or _enabled(profile.get("is_banned")):
                 return None
+            if key.get("used_by") != telegram_id:
+                key["used_by"] = telegram_id
+                await _write(db)
             result = dict(key)
             result["_stored_code"] = stored_code
             result["_returning_owner"] = True
@@ -212,6 +211,8 @@ async def reset_key_binding(code: str) -> bool:
     key["is_active"] = 1
     key.pop("revoked", None)
     key.pop("disabled", None)
+    if str(key.get("status", "")).strip().casefold() in {"revoked", "disabled", "inactive", "expired"}:
+        key.pop("status", None)
     key.pop("used_by", None)
     key.pop("used_at", None)
     await save_db(db)
