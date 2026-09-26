@@ -51,13 +51,10 @@ async def activate_api(request: web.Request) -> web.Response:
         minecraft_username = db.sanitize_input(payload.get("minecraft_username"), 64)
         logging.info("[AUDIT] minecraft_auth username=%s code=%s", minecraft_username or "-", "<hidden>")
         data = await db.load_db()
-        key = data.get("keys", {}).get(code)
-        if key is None:
-            key = next((item for item in data.get("keys", {}).values()
-                        if item.get("key") == code or item.get("key_code") == code), None)
-        if not key or not key.get("is_used") or key.get("is_active", 1) == 0:
+        stored_code, key = db._find_key(data, code)
+        if not key or not db.is_key_used(key) or not db.is_key_active(key):
             logging.warning("[AUDIT] minecraft_auth rejected reason=invalid_or_unused")
-            return web.json_response({"ok": False, "error": "Ключ ещё не активирован в Telegram или не существует."}, status=403)
+            return web.json_response({"ok": False, "error": "Ключ не найден, отключён или ещё не активирован в Telegram."}, status=403)
         owner_id = key.get("used_by")
         user = data.get("users", {}).get(str(owner_id)) if owner_id is not None else None
         if not user or not user.get("is_approved") or user.get("is_banned"):
@@ -72,7 +69,7 @@ async def activate_api(request: web.Request) -> web.Response:
             return web.json_response({"ok": False, "error": "Слишком частые попытки. Подождите несколько секунд."}, status=429)
         _ACTIVATE_ATTEMPTS[ip] = now
         location = await resolve_location(ip)
-        request_id = await db.create_login_request(owner_id, code, ip, location)
+        request_id = await db.create_login_request(owner_id, stored_code, ip, location)
         logging.info("[AUDIT] login_request created request_id=%s owner_id=%s ip=%s location=%s", request_id, owner_id, ip, location)
         try:
             await bot_instance.send_message(owner_id,
@@ -116,13 +113,10 @@ async def heartbeat_api(request: web.Request) -> web.Response:
         code = db.sanitize_input(payload.get("code"), 128)
         minecraft_username = db.sanitize_input(payload.get("minecraft_username"), 64)
         data = await db.load_db()
-        key = data.get("keys", {}).get(code)
-        if key is None:
-            key = next((item for item in data.get("keys", {}).values()
-                        if item.get("key") == code or item.get("key_code") == code), None)
+        _, key = db._find_key(data, code)
         owner_id = key.get("used_by") if key else None
         user = data.get("users", {}).get(str(owner_id)) if owner_id is not None else None
-        if not key or not key.get("is_used") or key.get("is_active", 1) == 0 or not user or not user.get("is_approved") or user.get("is_banned") or user.get("client_kicked"):
+        if not key or not db.is_key_used(key) or not db.is_key_active(key) or not user or not user.get("is_approved") or user.get("is_banned") or user.get("client_kicked"):
             return web.json_response({"ok": False}, status=403)
         if minecraft_username and user.get("nickname", "").casefold() != minecraft_username.casefold():
             return web.json_response({"ok": False}, status=403)
@@ -150,16 +144,17 @@ async def login_status_api(request: web.Request) -> web.Response:
     if item.get("status") != "approved":
         return web.json_response({"ok": False, "pending": item.get("status") == "pending", "error": "Вход отклонён." if item.get("status") == "rejected" else "Ожидается подтверждение."}, status=403)
     data = await db.load_db(); user = data.get("users", {}).get(str(item.get("owner_id")), {})
-    key = data.get("keys", {}).get(item.get("key_code"), {})
+    _, key = db._find_key(data, item.get("key_code", ""))
+    key = key or {}
     return web.json_response({"ok": True, "telegram_id": item.get("owner_id"), "nickname": user.get("nickname", key.get("target_nickname", "")),
                               "role": user.get("role", key.get("role", "Стажер")), "mode": user.get("mode", key.get("mode", "")), "expires_at": user.get("expires_at", "")})
 
 async def moderation_event_api(request: web.Request) -> web.Response:
     try:
         payload = await request.json(); code = db.sanitize_input(payload.get("code"), 128)
-        data = await db.load_db(); key = data.get("keys", {}).get(code) or next((v for v in data.get("keys", {}).values() if v.get("key") == code or v.get("key_code") == code), None)
+        data = await db.load_db(); _, key = db._find_key(data, code)
         owner_id = key.get("used_by") if key else None; user = data.get("users", {}).get(str(owner_id)) if owner_id else None
-        if not key or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
+        if not key or not db.is_key_active(key) or not db.is_key_used(key) or not user or not user.get("is_approved") or user.get("client_kicked"): return web.json_response({"ok": False}, status=403)
         await db.record_moderation_event(owner_id, payload.get("type", "punishment"), db.sanitize_input(payload.get("target"), 64), db.sanitize_input(payload.get("action"), 64), db.sanitize_input(payload.get("duration"), 32), db.sanitize_input(payload.get("reason"), 300))
         return web.json_response({"ok": True})
     except Exception:
@@ -296,7 +291,9 @@ async def cosmetics_states_api(request: web.Request) -> web.Response:
         return web.json_response({"ok": False}, status=400)
 
 async def _irc_user(data: dict, code: str):
-    key = data.get("keys", {}).get(code) or next((v for v in data.get("keys", {}).values() if v.get("key") == code or v.get("key_code") == code), None)
+    _, key = db._find_key(data, code)
+    if not key or not db.is_key_active(key) or not db.is_key_used(key):
+        return None, None, None
     owner_id = key.get("used_by") if key else None; user = data.get("users", {}).get(str(owner_id)) if owner_id else None
     return key, owner_id, user
 
@@ -400,6 +397,29 @@ async def irc_prefix_api(request: web.Request) -> web.Response:
         logging.exception("[TAB_PREFIX] request failed")
         return web.json_response({"ok": False, "error": "Внутренняя ошибка API префикса."}, status=400)
 
+async def irc_reset_api(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json()
+        data = await db.load_db()
+        key, owner_id, user = await _irc_user(data, db.sanitize_input(payload.get("code"), 128))
+        if not key or owner_id is None or not user or not user.get("is_approved") \
+                or user.get("is_banned") or user.get("client_kicked"):
+            return web.json_response({"ok": False, "error": "Профиль неактивен или доступ отозван."}, status=403)
+
+        for field in ("irc_title", "tab_prefix", "tab_suffix"):
+            user.pop(field, None)
+        await db.save_db(data)
+
+        session = _RUNTIME_SESSIONS.get(int(owner_id))
+        if session is not None:
+            session["title"] = ""
+            session["tab_prefix"] = ""
+            session["tab_suffix"] = ""
+        return web.json_response({"ok": True})
+    except Exception:
+        logging.exception("[IRC_RESET] request failed")
+        return web.json_response({"ok": False, "error": "Внутренняя ошибка сброса оформления."}, status=400)
+
 async def admin_tab_decoration_api(request: web.Request) -> web.Response:
     try:
         payload = await request.json()
@@ -409,9 +429,7 @@ async def admin_tab_decoration_api(request: web.Request) -> web.Response:
         if not key or owner_id is None or not admin_user or not admin_user.get("is_approved") or admin_user.get("is_banned") or admin_user.get("client_kicked"):
             logging.warning("[TAB_DECORATION] rejected: admin profile inactive")
             return web.json_response({"ok": False, "error": "Нет активной авторизованной сессии."}, status=403)
-        if int(owner_id) not in admin_ids:
-            logging.warning("[TAB_DECORATION] rejected: caller is not in ADMIN_IDS owner=%s", owner_id)
-            return web.json_response({"ok": False, "error": "Команда доступна только администраторам бота."}, status=403)
+        caller_is_admin = int(owner_id) in admin_ids
         now = datetime.now(timezone.utc).timestamp()
         caller_session = _RUNTIME_SESSIONS.get(int(owner_id))
         if caller_session is None or now - float(caller_session.get("last_seen", 0)) > 45:
@@ -437,6 +455,10 @@ async def admin_tab_decoration_api(request: web.Request) -> web.Response:
             logging.warning("[TAB_DECORATION] rejected: target session not online target=%s", target_name)
             return web.json_response({"ok": False, "error": "Модератор не найден среди активных сессий."}, status=404)
         target_id = int(active.get("telegram_id", 0))
+        self_clear = target_id == int(owner_id) and not value
+        if not caller_is_admin and not self_clear:
+            logging.warning("[TAB_DECORATION] rejected: caller is not an admin or clearing own field owner=%s", owner_id)
+            return web.json_response({"ok": False, "error": "Команда доступна только администраторам бота."}, status=403)
         target_user = data.get("users", {}).get(str(target_id))
         if not target_user or not target_user.get("is_approved") or target_user.get("is_banned") or target_user.get("client_kicked"):
             return web.json_response({"ok": False, "error": "Профиль модератора неактивен."}, status=404)
@@ -474,6 +496,7 @@ async def start_api() -> web.AppRunner:
     app.router.add_post("/api/v1/irc/titles", irc_titles_api)
     app.router.add_get("/api/v1/irc/prefix", irc_prefix_api)
     app.router.add_post("/api/v1/irc/prefix", irc_prefix_api)
+    app.router.add_post("/api/v1/irc/reset", irc_reset_api)
     app.router.add_post("/api/v1/admin/tab-decoration", admin_tab_decoration_api)
     runner = web.AppRunner(app)
     await runner.setup()
