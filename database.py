@@ -175,15 +175,27 @@ async def redeem_key(code: str, telegram_id: int) -> dict | None:
         if not key or not is_key_active(key):
             return None
         if is_key_used(key):
-            # Повторный вход разрешен только тому Telegram-пользователю,
-            # который уже активировал этот ключ ранее.
+            # A key whose first Telegram write was interrupted can be retried
+            # by its recorded owner, but that retry must still create a pending
+            # application instead of silently approving a missing profile.
+            profile_exists = str(telegram_id) in db.get("users", {})
             profile = db.get("users", {}).get(str(telegram_id), {})
             profile_code = _canonical_key(profile.get("key_code"))
             profile_match = profile_code == _canonical_key(stored_code)
-            owner_match = key.get("used_by") == telegram_id or profile_match
-            if not owner_match or not profile_match or not _enabled(profile.get("is_approved")) or _enabled(profile.get("is_banned")):
+            owner_id = key.get("used_by")
+            if owner_id not in (None, telegram_id, str(telegram_id)) and profile_match:
                 return None
-            if key.get("used_by") != telegram_id:
+            if profile_match:
+                if not _enabled(profile.get("is_approved")) or _enabled(profile.get("is_banned")):
+                    return None
+            elif owner_id in (telegram_id, str(telegram_id)) and (not profile_exists or not profile_code):
+                result = dict(key)
+                result["_stored_code"] = stored_code
+                result["_returning_owner"] = False
+                return result
+            else:
+                return None
+            if owner_id is None:
                 key["used_by"] = telegram_id
                 await _write(db)
             result = dict(key)
